@@ -15,17 +15,17 @@ describe('App', () => {
     expect(screen.getByText('SoulCast IV')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /home/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /converter/i })).toBeInTheDocument();
-    expect(screen.getByText('Home View Placeholder')).toBeInTheDocument();
+    expect(screen.getByText('Welcome to SoulCast IV')).toBeInTheDocument();
   });
 
-  it('switches view when Sidebar buttons are clicked', async () => {
+  it('switches view when Sidebar buttons or CTA are clicked', async () => {
     render(
       <ThemeProvider>
         <App />
       </ThemeProvider>
     );
 
-    expect(screen.getByText('Home View Placeholder')).toBeInTheDocument();
+    expect(screen.getByText('Welcome to SoulCast IV')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /converter/i }));
     await waitFor(() => {
@@ -34,7 +34,12 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /home/i }));
     await waitFor(() => {
-      expect(screen.getByText('Home View Placeholder')).toBeInTheDocument();
+      expect(screen.getByText('Welcome to SoulCast IV')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /start converting/i }));
+    await waitFor(() => {
+      expect(screen.getByText('Converter View Placeholder')).toBeInTheDocument();
     });
   });
 });

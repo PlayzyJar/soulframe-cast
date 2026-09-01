@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Topbar from './components/layout/Topbar';
 import Sidebar from './components/layout/Sidebar';
+import HomeView from './views/HomeView';
 import { motion, AnimatePresence } from 'framer-motion';
 
 function App() {
@@ -21,7 +22,7 @@ function App() {
               transition={{ duration: 0.3 }}
               className="h-full"
             >
-              {view === 'home' ? <div>Home View Placeholder</div> : <div>Converter View Placeholder</div>}
+              {view === 'home' ? <HomeView setView={setView} /> : <div>Converter View Placeholder</div>}
             </motion.div>
           </AnimatePresence>
         </main>
