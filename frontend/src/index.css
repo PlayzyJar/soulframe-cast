@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: #f5f5dc; /* Muted beige */
+    --foreground: #1a1a1a;
+    --primary: #dcdcaa;
+    --accent: #ff6b6b;
+  }
+
+  .dark {
+    --background: #000000; /* Undertale black */
+    --foreground: #ffffff; /* Undertale white */
+    --primary: #ff00ff; /* Neon magenta accent */
+    --accent: #00ffff; /* Neon cyan */
+  }
+
+  body {
+    @apply bg-background text-foreground transition-colors duration-700 ease-in-out font-mono;
+  }
+}
