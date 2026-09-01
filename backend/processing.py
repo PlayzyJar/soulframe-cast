@@ -264,78 +264,67 @@ class TaskManager:
                 with open(input_path, "wb") as f:
                     f.write(file_bytes)
             else:
-                # Fallback generator: create a synthetic moving animation if no file
                 img = Image.new('L', (w, h), 0)
                 img.save(input_path)
 
-            await task.update_progress(25, "Extracting video frames with FFmpeg...")
+            await task.update_progress(20, "Extracting video frames with FFmpeg...")
             
-            # Check if input is an animated GIF or video
-            is_gif = input_ext.lower() == ".gif"
-            extracted_frames = []
-
-            # Try FFmpeg extraction
-            ffmpeg_ok = False
-            try:
-                frame_pattern = str(task_dir / "raw_frame_%05d.png")
+            # Run FFmpeg synchronously in a thread pool (reliable on all Windows async loops)
+            frame_pattern = task_dir / "raw_frame_%05d.png"
+            def run_ffmpeg():
                 cmd = [
                     "ffmpeg",
                     "-y",
                     "-i", str(input_path),
                     "-vf", f"fps={fps},scale={w}:{h}:flags=lanczos",
-                    frame_pattern
+                    str(frame_pattern)
                 ]
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await proc.communicate()
-                if proc.returncode == 0:
-                    raw_files = sorted(task_dir.glob("raw_frame_*.png"))
-                    if raw_files:
-                        for rf in raw_files:
-                            extracted_frames.append(Image.open(rf).copy())
-                        ffmpeg_ok = True
-            except Exception:
-                ffmpeg_ok = False
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                return res.returncode, res.stderr.decode('utf-8', errors='ignore')
 
-            # Fallback extraction using PIL if FFmpeg did not yield frames
-            if not ffmpeg_ok or not extracted_frames:
+            retcode, ffmpeg_err = await asyncio.to_thread(run_ffmpeg)
+            
+            raw_files = sorted(task_dir.glob("raw_frame_*.png"))
+            
+            # Fallback to PIL extraction if ffmpeg didn't produce frames (e.g. animated GIF)
+            if not raw_files:
                 try:
                     with Image.open(input_path) as im:
-                        for frame_no in range(getattr(im, "n_frames", 1)):
+                        n_frames = getattr(im, "n_frames", 1)
+                        for frame_no in range(n_frames):
                             im.seek(frame_no)
                             frame_resized = im.resize((w, h), Image.Resampling.LANCZOS)
-                            extracted_frames.append(frame_resized.copy())
+                            save_path = task_dir / f"raw_frame_{frame_no:05d}.png"
+                            frame_resized.save(save_path)
+                    raw_files = sorted(task_dir.glob("raw_frame_*.png"))
                 except Exception:
-                    # Synthetic single frame fallback
-                    extracted_frames = [Image.new('L', (w, h), 128)]
+                    pass
 
-            total_frames = len(extracted_frames)
-            await task.update_progress(45, f"Binarizing & dithering {total_frames} frames ({dithering})...")
+            if not raw_files:
+                raise RuntimeError(f"Failed to extract video frames: {ffmpeg_err[-300:] if ffmpeg_err else 'Unknown format'}")
+
+            total_frames = len(raw_files)
+            await task.update_progress(35, f"Binarizing & dithering {total_frames} frames ({dithering})...")
 
             packed_bytes_list = []
             preview_png_paths = []
 
-            for idx, raw_img in enumerate(extracted_frames):
-                # Apply 1-bit dither
-                dithered = convert_frame_to_1bit(raw_img, dithering)
-                packed = pack_1bit_pixels(dithered)
-                packed_bytes_list.append(packed)
+            for idx, raw_file_path in enumerate(raw_files):
+                with Image.open(raw_file_path) as raw_img:
+                    dithered = convert_frame_to_1bit(raw_img, dithering)
+                    packed = pack_1bit_pixels(dithered)
+                    packed_bytes_list.append(packed)
 
-                # Save preview PNG in frames/
-                png_path = frames_dir / f"frame_{idx:05d}.png"
-                dithered.save(png_path)
-                preview_png_paths.append(png_path)
+                    png_path = frames_dir / f"frame_{idx:05d}.png"
+                    dithered.save(png_path)
+                    preview_png_paths.append(png_path)
 
-                # Update incremental progress
-                if total_frames > 0:
-                    cur_prog = 45 + int(40 * (idx + 1) / total_frames)
-                    if (idx + 1) % max(1, total_frames // 5) == 0 or idx == total_frames - 1:
-                        await task.update_progress(cur_prog, f"Dithering frame {idx + 1}/{total_frames}...")
+                # Incremental progress reporting
+                if total_frames > 0 and ((idx + 1) % max(1, total_frames // 10) == 0 or idx == total_frames - 1):
+                    cur_prog = 35 + int(50 * (idx + 1) / total_frames)
+                    await task.update_progress(cur_prog, f"Dithering frame {idx + 1}/{total_frames} ({dithering})...")
 
-            await task.update_progress(90, "Compiling C++ header and ZIP bundle...")
+            await task.update_progress(88, f"Compiling C++ header and ZIP bundle for {total_frames} frames...")
 
             # 1. Generate C++ Header
             header_str = generate_cpp_header(filename, resolution, fps, dithering, packed_bytes_list)
