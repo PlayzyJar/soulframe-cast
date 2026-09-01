@@ -154,6 +154,7 @@ export default function ConverterView() {
   });
 
   const [taskId, setTaskId] = useState(null);
+  const [completedTaskId, setCompletedTaskId] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressData, setProgressData] = useState({ progress: 0, stage: '', error: null, status: 'idle' });
   
@@ -174,6 +175,7 @@ export default function ConverterView() {
     if (!file) return;
     
     setIsProcessing(true);
+    setCompletedTaskId(null);
     setProgressData({ progress: 0, stage: 'Starting...', error: null, status: 'processing' });
 
     const formData = new FormData();
@@ -215,6 +217,9 @@ export default function ConverterView() {
       if (data.status === 'completed' || data.status === 'failed') {
         eventSource.close();
         setIsProcessing(false);
+        if (data.status === 'completed') {
+          setCompletedTaskId(taskId);
+        }
         setTaskId(null);
       }
     };
@@ -243,28 +248,40 @@ export default function ConverterView() {
       isComplete: false,
     });
 
-    // Simulate packing delay and trigger real download
+    // Dispatch real file download from backend server
     setTimeout(() => {
-      if (type === 'cpp') {
-        const content = generateCppHeaderContent(file?.name, settings);
-        const blob = new Blob([content], { type: 'text/x-c++hdr;charset=utf-8' });
-        triggerBlobDownload(blob, targetFilename);
+      if (completedTaskId) {
+        const endpoint = type === 'zip' ? 'zip' : 'header';
+        const downloadUrl = `http://localhost:8000/download/${completedTaskId}/${endpoint}`;
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = targetFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
       } else {
-        const headerContent = generateCppHeaderContent(file?.name, settings);
-        const manifest = JSON.stringify({
-          source: file?.name || 'media',
-          resolution: settings.resolution,
-          fps: settings.fps,
-          dithering: settings.dithering,
-          generated_by: 'SoulCast IV v1.0'
-        }, null, 2);
+        // Fallback generator in case of standalone demo
+        if (type === 'cpp') {
+          const content = generateCppHeaderContent(file?.name, settings);
+          const blob = new Blob([content], { type: 'text/x-c++hdr;charset=utf-8' });
+          triggerBlobDownload(blob, targetFilename);
+        } else {
+          const headerContent = generateCppHeaderContent(file?.name, settings);
+          const manifest = JSON.stringify({
+            source: file?.name || 'media',
+            resolution: settings.resolution,
+            fps: settings.fps,
+            dithering: settings.dithering,
+            generated_by: 'SoulCast IV v1.0'
+          }, null, 2);
 
-        const zipBlob = createSimpleZipBlob([
-          { name: `soulcast_${baseName}.h`, data: headerContent },
-          { name: 'manifest.json', data: manifest },
-          { name: 'README.txt', data: 'SoulCast IV 1-bit frames archive.\nImport soulcast_*.h into your Arduino/ESP32 sketch.\n' },
-        ]);
-        triggerBlobDownload(zipBlob, targetFilename);
+          const zipBlob = createSimpleZipBlob([
+            { name: `soulcast_${baseName}.h`, data: headerContent },
+            { name: 'manifest.json', data: manifest },
+            { name: 'README.txt', data: 'SoulCast IV 1-bit frames archive.\nImport soulcast_*.h into your Arduino/ESP32 sketch.\n' },
+          ]);
+          triggerBlobDownload(zipBlob, targetFilename);
+        }
       }
 
       setModalState(prev => ({
@@ -272,7 +289,7 @@ export default function ConverterView() {
         isDownloading: false,
         isComplete: true,
       }));
-    }, 1200);
+    }, 1000);
   };
 
   const closeModal = () => {
