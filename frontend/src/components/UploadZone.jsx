@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { Folder, FolderOpen } from 'lucide-react';
 
 export default function UploadZone({ onFileSelect }) {
   const [isDragging, setIsDragging] = useState(false);
@@ -47,9 +48,11 @@ export default function UploadZone({ onFileSelect }) {
         className="hidden" 
         accept="video/*,image/gif"
       />
-      <div className="text-6xl mb-6">📁</div>
+      <div className="mb-6 text-accent">
+        {isDragging ? <FolderOpen size={80} strokeWidth={1.5} /> : <Folder size={80} strokeWidth={1.5} />}
+      </div>
       <h3 className="text-3xl font-extrabold uppercase mb-2">Drag & Drop</h3>
-      <p className="text-lg text-muted-foreground uppercase font-bold">or click to select a video/GIF</p>
+      <p className="text-lg opacity-80 uppercase font-bold">or click to select a video/GIF</p>
     </div>
   );
 }
