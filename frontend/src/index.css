@@ -1,0 +1,23 @@
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: #f2efe5; /* Soft retro cream */
+    --foreground: #2e2e36; /* Soft retro dark navy/gray */
+    --primary: #ff6b6b;
+    --accent: #ff6b6b;
+  }
+
+  .dark {
+    --background: #231915; /* Escuro de tons café marcantes */
+    --foreground: #ebdcd0; /* Texto quente pastel */
+    --primary: #d48b99; /* Magenta/Coração mais pastel */
+    --accent: #d48b99;
+  }
+
+  body {
+    @apply bg-background text-foreground transition-colors duration-700 ease-in-out font-mono;
+  }
+}
