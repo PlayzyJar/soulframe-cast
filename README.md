@@ -1,4 +1,4 @@
-﻿# SoulCast IV
+# SoulCast IV
 
 A lightweight, stateless 1-bit video and GIF conversion engine optimized for microcontrollers and monochrome OLED/LCD displays (SSD1306, SH1106, ST7920, SSD1309).
 
@@ -198,10 +198,23 @@ void draw_frame_avr(Adafruit_SSD1306 &disp, uint16_t frame_index) {
 - Node.js 18+
 - FFmpeg installed and accessible in system `PATH`
 
-### Backend Setup
+### Backend Setup (Virtual Environment)
 ```bash
 cd backend
+
+# 1. Create and activate virtual environment
+# On Linux/macOS:
+python3 -m venv venv
+source venv/bin/activate
+
+# On Windows (PowerShell / Command Prompt):
+python -m venv venv
+.\venv\Scripts\activate
+
+# 2. Install dependencies
 pip install -r requirements.txt
+
+# 3. Start development server
 uvicorn main:app --reload --port 8000
 ```
 

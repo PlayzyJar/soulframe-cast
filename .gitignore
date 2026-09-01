@@ -6,3 +6,7 @@ dist/
 .pytest_cache/
 docs/superpowers/
 .superpowers/
+venv/
+.venv/
+env/
+
