@@ -1,4 +1,4 @@
-@tailwind base;
+﻿@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -11,10 +11,10 @@
   }
 
   .dark {
-    --background: #2e2e36;
-    --foreground: #f2efe5;
-    --primary: #ff00ff;
-    --accent: #ff00ff;
+    --background: #231915; /* Escuro de tons café marcantes */
+    --foreground: #ebdcd0; /* Texto quente pastel */
+    --primary: #d48b99; /* Magenta/Coração mais pastel */
+    --accent: #d48b99;
   }
 
   body {

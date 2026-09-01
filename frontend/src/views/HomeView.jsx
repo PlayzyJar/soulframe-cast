@@ -57,7 +57,7 @@ function CmdHeart() {
               return (
                 <mesh key={`${x}-${y}`} position={[x * pixelSize - offsetX, -y * pixelSize + offsetY, 0]}>
                   <boxGeometry args={[pixelSize, pixelSize, 0.1]} />
-                  <meshStandardMaterial color="#ff00ff" />
+                  <meshStandardMaterial color="#d48b99" />
                 </mesh>
               )
             }
