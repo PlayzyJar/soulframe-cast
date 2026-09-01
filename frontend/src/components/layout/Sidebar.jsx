@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Home, FileVideo, Menu } from 'lucide-react';
+import { Home, FileVideo, PanelLeftClose } from 'lucide-react';
 
 const PixelHeart = ({ className }) => (
   <svg width="32" height="32" viewBox="0 0 7 6" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -29,7 +29,7 @@ export default function Sidebar({ setView, isCollapsed, setIsCollapsed, activeVi
             animate={{ 
               rotate: isHovered ? 180 : 0, 
               opacity: isHovered ? 0 : 1,
-              scale: isHovered ? 0.5 : 1
+              scale: isHovered ? 0 : 1
             }}
             transition={{ duration: 0.3 }}
             className="absolute"
@@ -39,14 +39,14 @@ export default function Sidebar({ setView, isCollapsed, setIsCollapsed, activeVi
           <motion.div
             initial={false}
             animate={{ 
-              rotate: isHovered ? 0 : -180, 
+              rotate: isHovered ? (isCollapsed ? 180 : 0) : (isCollapsed ? 360 : -180), 
               opacity: isHovered ? 1 : 0,
-              scale: isHovered ? 1 : 0.5
+              scale: isHovered ? 1 : 0
             }}
             transition={{ duration: 0.3 }}
             className="absolute text-foreground"
           >
-            <Menu size={28} strokeWidth={3} />
+            <PanelLeftClose size={28} strokeWidth={2.5} />
           </motion.div>
         </div>
       </div>
