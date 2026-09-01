@@ -13,7 +13,7 @@ export default function Topbar() {
       </div>
       <button 
         onClick={toggleTheme}
-        className="p-2 border-2 border-foreground bg-accent text-foreground shadow-brutal dark:shadow-brutal-dark hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all"
+        className="p-2 border-2 border-foreground bg-accent text-foreground shadow-brutal hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all"
         aria-label="Toggle theme"
       >
         {theme === 'light' ? <Moon size={24} strokeWidth={2.5}/> : <Sun size={24} strokeWidth={2.5}/>}

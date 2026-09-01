@@ -4,17 +4,17 @@
 
 @layer base {
   :root {
-    --background: #f5f5dc; /* Muted beige */
-    --foreground: #1a1a1a;
-    --primary: #dcdcaa;
+    --background: #f2efe5; /* Soft retro cream */
+    --foreground: #2e2e36; /* Soft retro dark navy/gray */
+    --primary: #ff6b6b;
     --accent: #ff6b6b;
   }
 
   .dark {
-    --background: #000000; /* Undertale black */
-    --foreground: #ffffff; /* Undertale white */
-    --primary: #ff00ff; /* Neon magenta accent */
-    --accent: #00ffff; /* Neon cyan */
+    --background: #2e2e36;
+    --foreground: #f2efe5;
+    --primary: #ff00ff;
+    --accent: #ff00ff;
   }
 
   body {

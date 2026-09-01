@@ -75,7 +75,7 @@ export default function HomeView({ setView }) {
       <h2 className="text-4xl font-extrabold mb-4 uppercase tracking-tighter">Welcome to SoulCast IV</h2>
       <p className="text-xl mb-8 max-w-2xl">Convert your videos and GIFs into 1-bit frames optimized for microcontrollers. Step 1: Upload. Step 2: Configure. Step 3: Export.</p>
       
-      <div className="w-64 h-64 mb-8 border-4 border-foreground shadow-brutal dark:shadow-brutal-dark bg-black/10">
+      <div className="w-64 h-64 mb-8 border-4 border-foreground shadow-brutal bg-black/10">
         <Canvas>
           <ambientLight intensity={0.5} />
           <pointLight position={[10, 10, 10]} />
@@ -86,7 +86,7 @@ export default function HomeView({ setView }) {
 
       <button 
         onClick={() => setView('converter')}
-        className="px-8 py-4 bg-accent text-foreground text-xl font-bold uppercase border-4 border-foreground shadow-brutal dark:shadow-brutal-dark hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all"
+        className="px-8 py-4 bg-accent text-foreground text-xl font-bold uppercase border-4 border-foreground shadow-brutal hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all"
       >
         Start Converting
       </button>

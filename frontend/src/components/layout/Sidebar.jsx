@@ -78,8 +78,8 @@ function SidebarItem({ icon, label, isActive, onClick, isCollapsed }) {
       title={isCollapsed ? label : undefined}
       className={`flex items-center gap-4 font-bold text-lg border-2 uppercase transition-all whitespace-nowrap overflow-hidden
         ${isActive 
-          ? 'border-foreground bg-foreground text-background shadow-brutal dark:shadow-brutal-dark hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none' 
-          : 'border-transparent text-foreground hover:border-foreground hover:shadow-brutal dark:hover:shadow-brutal-dark'
+          ? 'border-foreground bg-foreground text-background shadow-brutal hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none' 
+          : 'border-transparent text-foreground hover:border-foreground hover:shadow-brutal'
         }
         ${isCollapsed ? 'justify-center w-12 h-12 rounded-none p-0 mx-auto' : 'w-full p-3'}
       `}
