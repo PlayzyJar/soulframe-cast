@@ -1,6 +1,7 @@
 import asyncio
+import json
 from typing import Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -28,13 +29,46 @@ def health_check():
 
 @app.post("/process", response_model=ProcessResponse)
 async def start_processing(
+    request: Request,
     background_tasks: BackgroundTasks,
-    request: Optional[ProcessRequest] = None,
 ):
-    req = request or ProcessRequest()
-    task = task_manager.create_task(req.model_dump())
-    delay = req.step_delay if req.step_delay is not None else 0.05
-    background_tasks.add_task(task_manager.run_mock_processing, task, step_delay=delay)
+    content_type = request.headers.get("content-type", "")
+    filename = "video.mp4"
+    options = {}
+    step_delay = 0.05
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        uploaded_file = form.get("file")
+        if uploaded_file and hasattr(uploaded_file, "filename") and uploaded_file.filename:
+            filename = uploaded_file.filename
+        settings_raw = form.get("settings")
+        if settings_raw:
+            try:
+                if isinstance(settings_raw, str):
+                    options = json.loads(settings_raw)
+                elif isinstance(settings_raw, dict):
+                    options = settings_raw
+            except Exception:
+                pass
+    elif "application/json" in content_type:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                filename = body.get("filename", filename)
+                options = body.get("options", options)
+                step_delay = body.get("step_delay", step_delay)
+        except Exception:
+            pass
+
+    payload = {
+        "filename": filename,
+        "options": options,
+        "step_delay": step_delay,
+    }
+
+    task = task_manager.create_task(payload)
+    background_tasks.add_task(task_manager.run_mock_processing, task, step_delay=step_delay)
 
     return ProcessResponse(
         task_id=task.task_id,

@@ -96,3 +96,22 @@ async def test_async_sse_stream_realtime():
             assert len(events) >= 1
             assert events[-1]["status"] == "completed"
             assert events[-1]["progress"] == 100
+
+
+def test_start_processing_multipart():
+    # Simulate a binary video file upload with byte values including high/non-utf8 bytes
+    binary_content = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00\xe4\x85g\x01\x8b\xff"
+    files = {"file": ("test_video.mp4", binary_content, "video/mp4")}
+    data = {"settings": json.dumps({"resolution": "128x64", "fps": 15, "dithering": "floyd-steinberg"})}
+    response = client.post("/process", files=files, data=data)
+    assert response.status_code == 200
+    res_data = response.json()
+    assert "task_id" in res_data
+    assert res_data["status"] == "started"
+
+    # Verify task payload stored the filename and options
+    task = task_manager.get_task(res_data["task_id"])
+    assert task is not None
+    assert task.payload["filename"] == "test_video.mp4"
+    assert task.payload["options"]["resolution"] == "128x64"
+
