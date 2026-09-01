@@ -6,12 +6,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 function App() {
   const [view, setView] = useState('home');
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
-      <Topbar />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar setView={setView} />
+    <div className="flex h-screen overflow-hidden bg-background transition-colors duration-700 font-mono">
+      <Sidebar setView={setView} isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} activeView={view} />
+      <div className="flex flex-col flex-1 overflow-hidden">
+        <Topbar />
         <main className="flex-1 overflow-auto p-8 relative">
           <AnimatePresence mode="wait">
             <motion.div
