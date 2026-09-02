@@ -275,36 +275,126 @@ export default function ConverterView() {
     if (!taskId) return;
 
     const API_BASE = import.meta.env.VITE_API_URL || '';
-    const eventSource = new EventSource(`${API_BASE}/progress/${taskId}`);
+    let isSubscribed = true;
+    let pollInterval = null;
+    let eventSource = null;
+    let failureCount = 0;
 
-    eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      setProgressData({
-        progress: data.progress,
-        stage: data.stage,
-        error: data.error,
-        status: data.status
-      });
-
-      if (data.status === 'completed' || data.status === 'failed') {
+    const cleanup = () => {
+      if (eventSource) {
         eventSource.close();
-        setIsProcessing(false);
-        if (data.status === 'completed') {
-          setCompletedTaskId(taskId);
-        }
-        setTaskId(null);
+        eventSource = null;
+      }
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
       }
     };
 
-    eventSource.onerror = (err) => {
-      setProgressData(prev => ({ ...prev, error: 'SSE Connection lost', stage: 'Error', status: 'failed' }));
-      eventSource.close();
-      setIsProcessing(false);
-      setTaskId(null);
+    const pollTaskStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/tasks/${taskId}`);
+        if (!isSubscribed) return;
+        if (res.ok) {
+          failureCount = 0;
+          const data = await res.json();
+          setProgressData(prev => ({
+            ...prev,
+            progress: data.progress ?? prev.progress,
+            stage: data.stage || prev.stage,
+            status: data.status,
+            error: data.error || null,
+          }));
+
+          if (data.status === 'completed') {
+            cleanup();
+            setIsProcessing(false);
+            setCompletedTaskId(taskId);
+            setTaskId(null);
+          } else if (data.status === 'failed') {
+            cleanup();
+            setIsProcessing(false);
+            setProgressData(prev => ({
+              ...prev,
+              status: 'failed',
+              error: data.error || 'Conversion failed',
+              stage: 'Failed',
+            }));
+            setTaskId(null);
+          }
+        } else if (res.status === 404) {
+          failureCount++;
+          if (failureCount >= 3) {
+            cleanup();
+            setIsProcessing(false);
+            setProgressData(prev => ({
+              ...prev,
+              status: 'failed',
+              error: 'Task not found on server',
+              stage: 'Error',
+            }));
+            setTaskId(null);
+          }
+        }
+      } catch (err) {
+        failureCount++;
+        if (failureCount >= 6) {
+          cleanup();
+          setIsProcessing(false);
+          setProgressData(prev => ({
+            ...prev,
+            status: 'failed',
+            error: 'Server connection interrupted. Please check if the backend is running.',
+            stage: 'Network Error',
+          }));
+          setTaskId(null);
+        }
+      }
     };
 
+    try {
+      eventSource = new EventSource(`${API_BASE}/progress/${taskId}`);
+
+      eventSource.onmessage = (event) => {
+        if (!isSubscribed) return;
+        try {
+          const data = JSON.parse(event.data);
+          setProgressData({
+            progress: data.progress,
+            stage: data.stage,
+            error: data.error,
+            status: data.status,
+          });
+
+          if (data.status === 'completed' || data.status === 'failed') {
+            cleanup();
+            setIsProcessing(false);
+            if (data.status === 'completed') {
+              setCompletedTaskId(taskId);
+            }
+            setTaskId(null);
+          }
+        } catch {
+          // Keep-alive or comment frame, ignore
+        }
+      };
+
+      eventSource.onerror = () => {
+        if (!isSubscribed) return;
+        // Do not fail abruptly on proxy blinks or idle timeouts.
+        // Fall back to REST polling while keeping the conversion flow alive.
+        if (!pollInterval) {
+          pollInterval = setInterval(pollTaskStatus, 1500);
+        }
+        pollTaskStatus();
+      };
+    } catch {
+      pollInterval = setInterval(pollTaskStatus, 1500);
+    }
+
     return () => {
-      eventSource.close();
+      isSubscribed = false;
+      cleanup();
     };
   }, [taskId]);
 

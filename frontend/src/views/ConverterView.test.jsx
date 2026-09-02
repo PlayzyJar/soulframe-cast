@@ -154,4 +154,61 @@ describe('ConverterView', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
+
+  it('falls back to polling task status when SSE encounters an error', async () => {
+    class MockEventSource {
+      constructor(url) {
+        this.url = url;
+        setTimeout(() => {
+          if (this.onerror) this.onerror(new Event('error'));
+        }, 20);
+      }
+      close() {}
+    }
+    vi.stubGlobal('EventSource', MockEventSource);
+
+    const fetchMock = vi.fn().mockImplementation(async (url) => {
+      if (url.includes('/preview')) {
+        return { ok: true, json: async () => ({ preview_image: 'data:image/png;base64,abc' }) };
+      }
+      if (url.includes('/process')) {
+        return { ok: true, json: async () => ({ task_id: 'task-123', status: 'started' }) };
+      }
+      if (url.includes('/tasks/task-123')) {
+        return {
+          ok: true,
+          json: async () => ({
+            task_id: 'task-123',
+            status: 'completed',
+            progress: 100,
+            stage: 'Conversion complete!',
+          }),
+        };
+      }
+      return { ok: false };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ConverterView />);
+
+    const fileInput = document.querySelector('input[type="file"]');
+    const testFile = new File(['clip'], 'clip.mp4', { type: 'video/mp4' });
+    fireEvent.change(fileInput, { target: { files: [testFile] } });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /start conversion/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /start conversion/i }));
+
+    // Verify polling was triggered and conversion completes despite SSE error
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/task-123'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/conversion complete/i)).toBeInTheDocument();
+    });
+  });
 });
+

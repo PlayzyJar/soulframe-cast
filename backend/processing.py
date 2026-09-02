@@ -11,6 +11,7 @@ import math
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import uuid
@@ -277,22 +278,27 @@ def extract_preview_frame(
         }
 
 
-def generate_cpp_header(
+def write_cpp_header_stream(
+    out_file,
     filename: str,
     resolution: str,
     fps: int,
     dithering: str,
-    color_mode: Any = "monochrome",
-    frames_packed_bytes: Optional[List[bytes]] = None,
-) -> str:
-    """Generate Arduino / ESP32 C++ PROGMEM header file for RGB565, Grayscale, or Monochrome."""
-    if isinstance(color_mode, list):
+    color_mode: str = "monochrome",
+    frames_packed_bytes: Optional[list] = None,
+) -> None:
+    """Stream C++ header contents directly to an open file/buffer to minimize memory allocations."""
+    if isinstance(color_mode, list) and frames_packed_bytes is None:
         frames_packed_bytes = color_mode
         color_mode = "monochrome"
 
     frames_packed_bytes = frames_packed_bytes or []
     mode = str(color_mode or "monochrome").lower()
-    w, h = map(int, resolution.split('x'))
+    try:
+        w, h = map(int, resolution.split('x'))
+    except Exception:
+        w, h = 128, 64
+
     safe_name = "".join(c if c.isalnum() else "_" for c in Path(filename).stem) or "animation"
     total_frames = len(frames_packed_bytes)
 
@@ -310,79 +316,87 @@ def generate_cpp_header(
         total_elements = bytes_per_frame
         type_str = "uint8_t"
 
-    lines = [
-        "// ==========================================================================",
-        f"// SoulCast IV - Microcontroller Animation Frame Buffer ({mode.upper()})",
-        f"// Source File: {filename}",
-        f"// Resolution: {w}x{h} px | Framerate: {fps} FPS | Mode: {mode} | Dither: {dithering}",
-        f"// Total Frames: {total_frames} | Bytes per Frame: {bytes_per_frame} bytes",
-        f"// Total Memory: {total_frames * bytes_per_frame} bytes",
-        "// ==========================================================================",
-        f"#ifndef SOULCAST_{safe_name.upper()}_H",
-        f"#define SOULCAST_{safe_name.upper()}_H",
-        "",
-        "#include <stdint.h>",
-        "#ifdef __AVR__",
-        "  #include <avr/pgmspace.h>",
-        "#elif defined(ESP8266) || defined(ESP32)",
-        "  #include <pgmspace.h>",
-        "#else",
-        "  #define PROGMEM",
-        "#endif",
-        "",
-        f"#define {safe_name.upper()}_WIDTH         {w}",
-        f"#define {safe_name.upper()}_HEIGHT        {h}",
-        f"#define {safe_name.upper()}_FRAME_WIDTH   {w}",
-        f"#define {safe_name.upper()}_FRAME_HEIGHT  {h}",
-        f"#define {safe_name.upper()}_FRAME_COUNT   {total_frames}",
-        f"#define {safe_name.upper()}_FPS           {fps}",
-        f"#define {safe_name.upper()}_FRAME_SIZE    {bytes_per_frame}",
-    ]
+    out_file.write("// ==========================================================================\n")
+    out_file.write(f"// SoulCast IV - Microcontroller Animation Frame Buffer ({mode.upper()})\n")
+    out_file.write(f"// Source File: {filename}\n")
+    out_file.write(f"// Resolution: {w}x{h} px | Framerate: {fps} FPS | Mode: {mode} | Dither: {dithering}\n")
+    out_file.write(f"// Total Frames: {total_frames} | Bytes per Frame: {bytes_per_frame} bytes\n")
+    out_file.write(f"// Total Memory: {total_frames * bytes_per_frame} bytes\n")
+    out_file.write("// ==========================================================================\n")
+    out_file.write(f"#ifndef SOULCAST_{safe_name.upper()}_H\n")
+    out_file.write(f"#define SOULCAST_{safe_name.upper()}_H\n\n")
+    out_file.write("#include <stdint.h>\n")
+    out_file.write("#ifdef __AVR__\n")
+    out_file.write("  #include <avr/pgmspace.h>\n")
+    out_file.write("#elif defined(ESP8266) || defined(ESP32)\n")
+    out_file.write("  #include <pgmspace.h>\n")
+    out_file.write("#else\n")
+    out_file.write("  #define PROGMEM\n")
+    out_file.write("#endif\n\n")
+
+    out_file.write(f"#define {safe_name.upper()}_WIDTH         {w}\n")
+    out_file.write(f"#define {safe_name.upper()}_HEIGHT        {h}\n")
+    out_file.write(f"#define {safe_name.upper()}_FRAME_WIDTH   {w}\n")
+    out_file.write(f"#define {safe_name.upper()}_FRAME_HEIGHT  {h}\n")
+    out_file.write(f"#define {safe_name.upper()}_FRAME_COUNT   {total_frames}\n")
+    out_file.write(f"#define {safe_name.upper()}_FPS           {fps}\n")
+    out_file.write(f"#define {safe_name.upper()}_FRAME_SIZE    {bytes_per_frame}\n")
 
     if mode == "rgb565":
-        lines.append("#define COLOR_MODE_RGB565")
-        lines.append(
-            f"#define DRAW_FRAME(tft, frame_idx) tft.pushImage(0, 0, {safe_name.upper()}_WIDTH, {safe_name.upper()}_HEIGHT, (uint16_t*){safe_name}_frames[frame_idx])"
+        out_file.write("#define COLOR_MODE_RGB565\n")
+        out_file.write(
+            f"#define DRAW_FRAME(tft, frame_idx) tft.pushImage(0, 0, {safe_name.upper()}_WIDTH, {safe_name.upper()}_HEIGHT, (uint16_t*){safe_name}_frames[frame_idx])\n\n"
         )
-        lines.append("")
-        lines.append("// Frame data in 16-bit Big-Endian RGB565 format")
+        out_file.write("// Frame data in 16-bit Big-Endian RGB565 format\n")
     elif mode == "grayscale":
-        lines.append("#define COLOR_MODE_GRAYSCALE")
-        lines.append("")
-        lines.append("// Frame data in 8-bit grayscale format (0-255)")
+        out_file.write("#define COLOR_MODE_GRAYSCALE\n\n")
+        out_file.write("// Frame data in 8-bit grayscale format (0-255)\n")
     else:
-        lines.append("#define COLOR_MODE_MONOCHROME")
-        lines.append("")
-        lines.append("// Frame data in standard monochrome 1-bit format (MSB first)")
+        out_file.write("#define COLOR_MODE_MONOCHROME\n\n")
+        out_file.write("// Frame data in standard monochrome 1-bit format (MSB first)\n")
 
-    lines.append(f"const {type_str} PROGMEM {safe_name}_frames[{total_frames}][{total_elements}] = {{")
+    out_file.write(f"const {type_str} PROGMEM {safe_name}_frames[{total_frames}][{total_elements}] = {{\n")
+
+    hex_table_256 = [f"0x{i:02X}" for i in range(256)]
+    hex_table_65536 = [f"0x{i:04X}" for i in range(65536)] if mode == "rgb565" else None
 
     for frame_idx, frame_data in enumerate(frames_packed_bytes):
+        out_file.write(f"  // --- Frame {frame_idx} ---\n  {{\n")
         if mode == "rgb565":
-            vals = np.frombuffer(frame_data, dtype=">u2")
-            hex_items = [f"0x{int(v):04X}" for v in vals]
+            vals = np.frombuffer(frame_data, dtype=np.uint16)
+            if sys.byteorder == "little":
+                vals = vals.byteswap()
+            hex_items = [hex_table_65536[int(v)] for v in vals]
         else:
-            hex_items = [f"0x{b:02X}" for b in frame_data]
+            hex_items = [hex_table_256[int(b)] for b in frame_data]
 
-        formatted_rows = []
         row_size = 16
         for i in range(0, len(hex_items), row_size):
-            formatted_rows.append("    " + ", ".join(hex_items[i:i + row_size]))
+            chunk = hex_items[i:i + row_size]
+            is_last_row = (i + row_size >= len(hex_items))
+            comma = "" if is_last_row else ","
+            out_file.write("    " + ", ".join(chunk) + comma + "\n")
 
-        comma = "," if frame_idx < total_frames - 1 else ""
-        lines.append(f"  // --- Frame {frame_idx} ---")
-        lines.append("  {")
-        lines.append(",\n".join(formatted_rows))
-        lines.append(f"  }}{comma}")
+        frame_comma = "," if frame_idx < total_frames - 1 else ""
+        out_file.write(f"  }}{frame_comma}\n")
 
-    lines.extend([
-        "};",
-        "",
-        f"#endif // SOULCAST_{safe_name.upper()}_H",
-        ""
-    ])
+    out_file.write("};\n\n")
+    out_file.write(f"#endif // SOULCAST_{safe_name.upper()}_H\n")
 
-    return "\n".join(lines)
+
+def generate_cpp_header(
+    filename: str,
+    resolution: str,
+    fps: int,
+    dithering: str,
+    color_mode: str = "monochrome",
+    frames_packed_bytes: Optional[list] = None,
+) -> str:
+    import io
+    buf = io.StringIO()
+    write_cpp_header_stream(buf, filename, resolution, fps, dithering, color_mode, frames_packed_bytes)
+    return buf.getvalue()
+
 
 
 class Task:
@@ -517,6 +531,22 @@ class TaskManager:
                 img.save(input_path)
 
             estimated_total_frames = int(options.get("total_frames", 0) or options.get("estimated_total_frames", 0))
+            if estimated_total_frames <= 0 and input_path.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+                try:
+                    probe_cmd = [
+                        "ffprobe",
+                        "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        str(input_path),
+                    ]
+                    probe_res = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=3)
+                    if probe_res.returncode == 0 and probe_res.stdout.strip():
+                        duration_sec = float(probe_res.stdout.strip())
+                        estimated_total_frames = max(1, int(duration_sec * fps))
+                except Exception:
+                    pass
+
             if estimated_total_frames <= 0:
                 try:
                     with Image.open(input_path) as im:
@@ -599,9 +629,9 @@ class TaskManager:
                 if msg_type == "frame":
                     current_frame = data
                     if estimated_total_frames > 0:
-                        cur_prog = min(39, 10 + int(30 * (current_frame / estimated_total_frames)))
+                        cur_prog = min(39, 10 + int(29 * min(1.0, current_frame / estimated_total_frames)))
                     else:
-                        cur_prog = min(39, 10 + min(29, current_frame))
+                        cur_prog = min(39, 10 + min(29, current_frame // 2))
                     if cur_prog > last_extract_prog or current_frame % 5 == 0:
                         last_extract_prog = cur_prog
                         await task.update_progress(cur_prog, f"Extracting frame {current_frame}...")
@@ -661,8 +691,8 @@ class TaskManager:
                 cur_prog = 40 + int(50 * (idx + 1) / total_frames)
                 if (
                     (idx == total_frames - 1)
-                    or ((idx + 1) % 10 == 0)
-                    or (cur_prog >= last_reported_prog + 5)
+                    or ((idx + 1) % 5 == 0)
+                    or (cur_prog >= last_reported_prog + 2)
                 ):
                     await task.update_progress(cur_prog, f"Encoding frame {idx + 1}/{total_frames} ({color_mode})...")
                     await asyncio.sleep(0)
@@ -671,76 +701,83 @@ class TaskManager:
             await task.update_progress(90, f"Compiling C++ header and ZIP bundle for {total_frames} frames...")
             await asyncio.sleep(0)
 
-            # 1. Generate C++ Header
-            header_str = generate_cpp_header(filename, resolution, fps, dithering, color_mode, packed_bytes_list)
             safe_name = "".join(c if c.isalnum() else "_" for c in Path(filename).stem) or "animation"
             header_path = task_dir / f"soulcast_{safe_name}.h"
-            with open(header_path, "w", encoding="utf-8") as f:
-                f.write(header_str)
-
-            # 2. Generate ZIP Bundle
             zip_path = task_dir / f"soulcast_{safe_name}.zip"
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                # Add header
-                zf.write(header_path, arcname=f"soulcast_{safe_name}.h")
-                
-                # Add frames
-                for p in preview_png_paths:
-                    zf.write(p, arcname=f"frames/{p.name}")
-                
-                # Add Manifest JSON
-                manifest = {
-                    "source": filename,
-                    "resolution": resolution,
-                    "fps": fps,
-                    "dithering": dithering,
-                    "color_mode": color_mode,
-                    "total_frames": total_frames,
-                    "bytes_per_frame": len(packed_bytes_list[0]) if packed_bytes_list else 0,
-                    "generated_by": "SoulCast IV v1.2"
-                }
-                zf.writestr("manifest.json", json.dumps(manifest, indent=2))
-                
-                # Add README
-                if color_mode == "rgb565":
-                    readme_text = (
-                        f"# SoulCast IV - RGB565 Color Animation Export\n\n"
-                        f"- Source: {filename}\n"
-                        f"- Resolution: {resolution}\n"
-                        f"- Framerate: {fps} FPS\n"
-                        f"- Color Mode: RGB565 (16-bit Big-Endian)\n"
-                        f"- Frame Count: {total_frames}\n\n"
-                        f"## How to use with TFT_eSPI (ST7789, ILI9341, GC9A01):\n"
-                        f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
-                        f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
-                        f"3. Render frame: `DRAW_FRAME(tft, frame);`\n"
+
+            manifest = {
+                "source": filename,
+                "resolution": resolution,
+                "fps": fps,
+                "dithering": dithering,
+                "color_mode": color_mode,
+                "total_frames": total_frames,
+                "bytes_per_frame": len(packed_bytes_list[0]) if packed_bytes_list else 0,
+                "generated_by": "SoulCast IV v1.2"
+            }
+
+            if color_mode == "rgb565":
+                readme_text = (
+                    f"# SoulCast IV - RGB565 Color Animation Export\n\n"
+                    f"- Source: {filename}\n"
+                    f"- Resolution: {resolution}\n"
+                    f"- Framerate: {fps} FPS\n"
+                    f"- Color Mode: RGB565 (16-bit Big-Endian)\n"
+                    f"- Frame Count: {total_frames}\n\n"
+                    f"## How to use with TFT_eSPI (ST7789, ILI9341, GC9A01):\n"
+                    f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
+                    f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
+                    f"3. Render frame: `DRAW_FRAME(tft, frame);`\n"
+                )
+            elif color_mode == "grayscale":
+                readme_text = (
+                    f"# SoulCast IV - Grayscale Animation Export\n\n"
+                    f"- Source: {filename}\n"
+                    f"- Resolution: {resolution}\n"
+                    f"- Framerate: {fps} FPS\n"
+                    f"- Color Mode: Grayscale (8-bit)\n"
+                    f"- Frame Count: {total_frames}\n\n"
+                    f"## How to use in Arduino / ESP32:\n"
+                    f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
+                    f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
+                )
+            else:
+                readme_text = (
+                    f"# SoulCast IV - 1-Bit Animation Export\n\n"
+                    f"- Source: {filename}\n"
+                    f"- Resolution: {resolution}\n"
+                    f"- Framerate: {fps} FPS\n"
+                    f"- Dither Algorithm: {dithering}\n"
+                    f"- Frame Count: {total_frames}\n\n"
+                    f"## How to use in Arduino / ESP32:\n"
+                    f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
+                    f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
+                    f"3. Use with Adafruit_SSD1306: `display.drawBitmap(0, 0, {safe_name}_frames[frame], {w}, {h}, 1);`\n"
+                )
+
+            def build_archive():
+                # 1. Stream C++ Header directly to disk
+                with open(header_path, "w", encoding="utf-8") as f:
+                    write_cpp_header_stream(
+                        out_file=f,
+                        filename=filename,
+                        resolution=resolution,
+                        fps=fps,
+                        dithering=dithering,
+                        color_mode=color_mode,
+                        frames_packed_bytes=packed_bytes_list,
                     )
-                elif color_mode == "grayscale":
-                    readme_text = (
-                        f"# SoulCast IV - Grayscale Animation Export\n\n"
-                        f"- Source: {filename}\n"
-                        f"- Resolution: {resolution}\n"
-                        f"- Framerate: {fps} FPS\n"
-                        f"- Color Mode: Grayscale (8-bit)\n"
-                        f"- Frame Count: {total_frames}\n\n"
-                        f"## How to use in Arduino / ESP32:\n"
-                        f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
-                        f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
-                    )
-                else:
-                    readme_text = (
-                        f"# SoulCast IV - 1-Bit Animation Export\n\n"
-                        f"- Source: {filename}\n"
-                        f"- Resolution: {resolution}\n"
-                        f"- Framerate: {fps} FPS\n"
-                        f"- Dither Algorithm: {dithering}\n"
-                        f"- Frame Count: {total_frames}\n\n"
-                        f"## How to use in Arduino / ESP32:\n"
-                        f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
-                        f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
-                        f"3. Use with Adafruit_SSD1306: `display.drawBitmap(0, 0, {safe_name}_frames[frame], {w}, {h}, 1);`\n"
-                    )
-                zf.writestr("README.md", readme_text)
+
+                # 2. Package ZIP bundle
+                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    zf.write(header_path, arcname=f"soulcast_{safe_name}.h")
+                    for p in preview_png_paths:
+                        zf.write(p, arcname=f"frames/{p.name}")
+                    zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+                    zf.writestr("README.md", readme_text)
+
+            # Offload heavy file writing and compression from main asyncio event loop
+            await asyncio.to_thread(build_archive)
 
             result_info = {
                 "header_path": str(header_path),
@@ -829,7 +866,7 @@ class TaskManager:
                 except asyncio.TimeoutError:
                     if task._done_event.is_set():
                         break
-                    continue
+                    yield ": keepalive\n\n"
         finally:
             if sub_queue in task.subscribers:
                 task.subscribers.remove(sub_queue)

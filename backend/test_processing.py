@@ -395,6 +395,24 @@ async def test_real_processing_streaming_progress_events():
     assert any("Conversion complete" in s for s in stages)
 
 
+@pytest.mark.anyio
+async def test_task_manager_subscribe_progress_keepalive():
+    tm = TaskManager()
+    task = tm.create_task({"filename": "idle_test.mp4"})
 
+    events = []
 
+    async def listener():
+        async for sse_event in tm.subscribe_progress(task.task_id, timeout=0.05):
+            events.append(sse_event)
+            if len(events) >= 3:
+                break
 
+    listen_task = asyncio.create_task(listener())
+    await asyncio.wait_for(listen_task, timeout=1.0)
+
+    # First event is initial task state
+    assert events[0].startswith("data: ")
+    # Subsequent events on idle timeout should be keepalive comment pings
+    assert events[1] == ": keepalive\n\n"
+    assert events[2] == ": keepalive\n\n"
