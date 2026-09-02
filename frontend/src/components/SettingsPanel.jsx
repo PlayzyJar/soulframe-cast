@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function SettingsPanel({ settings, onSettingsChange }) {
+export default function SettingsPanel({ settings = {}, onSettingsChange }) {
   const handleChange = (e) => {
     const { name, value } = e.target;
     onSettingsChange({
@@ -9,11 +9,29 @@ export default function SettingsPanel({ settings, onSettingsChange }) {
     });
   };
 
+  const currentColorMode = settings.color_mode || 'monochrome';
+  const isDitheringDisabled = Boolean(settings.color_mode && settings.color_mode !== 'monochrome');
+
   return (
     <div className="flex flex-col p-6 border-4 border-foreground shadow-brutal bg-background">
       <h3 className="text-2xl font-bold uppercase mb-6 border-b-4 border-foreground pb-2">Settings</h3>
       
       <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-2">
+          <label className="font-bold uppercase" htmlFor="color_mode">Color Mode</label>
+          <select 
+            id="color_mode" 
+            name="color_mode" 
+            value={currentColorMode} 
+            onChange={handleChange}
+            className="p-3 border-4 border-foreground bg-background text-foreground font-mono focus:outline-none focus:ring-4 focus:ring-accent appearance-none cursor-pointer"
+          >
+            <option value="rgb565">Full Color (RGB565 - ST7789 / TFT)</option>
+            <option value="grayscale">Grayscale (8-bit - 256 Levels)</option>
+            <option value="monochrome">Monochrome (1-bit Dithered - SSD1306)</option>
+          </select>
+        </div>
+
         <div className="flex flex-col gap-2">
           <label className="font-bold uppercase" htmlFor="resolution">Resolution</label>
           <select 
@@ -53,12 +71,20 @@ export default function SettingsPanel({ settings, onSettingsChange }) {
             name="dithering" 
             value={settings.dithering} 
             onChange={handleChange}
-            className="p-3 border-4 border-foreground bg-background text-foreground font-mono focus:outline-none focus:ring-4 focus:ring-accent appearance-none cursor-pointer"
+            disabled={isDitheringDisabled}
+            className={`p-3 border-4 border-foreground bg-background text-foreground font-mono focus:outline-none focus:ring-4 focus:ring-accent appearance-none ${
+              isDitheringDisabled ? 'opacity-50 cursor-not-allowed bg-foreground/5' : 'cursor-pointer'
+            }`}
           >
             <option value="none">None (Threshold)</option>
             <option value="floyd-steinberg">Floyd-Steinberg</option>
             <option value="bayer">Bayer (Ordered)</option>
           </select>
+          {isDitheringDisabled && (
+            <p className="text-xs font-mono font-bold text-foreground/70 uppercase">
+              Dithering applies to Monochrome 1-bit only
+            </p>
+          )}
         </div>
       </div>
     </div>

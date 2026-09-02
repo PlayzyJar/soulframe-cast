@@ -150,7 +150,8 @@ export default function ConverterView() {
   const [settings, setSettings] = useState({
     resolution: '128x64',
     fps: 15,
-    dithering: 'floyd-steinberg'
+    dithering: 'floyd-steinberg',
+    color_mode: 'monochrome'
   });
 
   const [taskId, setTaskId] = useState(null);
