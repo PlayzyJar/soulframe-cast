@@ -150,3 +150,19 @@ async def download_zip(task_id: str):
         media_type="application/zip",
         filename=zip_path.name,
     )
+
+
+# Serve built frontend SPA if available (e.g. inside Docker container or production build)
+frontend_dist_env = os.environ.get("FRONTEND_DIST")
+dist_candidates = [
+    Path(frontend_dist_env) if frontend_dist_env else None,
+    Path(__file__).parent / "frontend_dist",
+    Path(__file__).parent.parent / "frontend" / "dist",
+]
+
+for candidate in dist_candidates:
+    if candidate and candidate.exists() and (candidate / "index.html").exists():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/", StaticFiles(directory=str(candidate), html=True), name="frontend")
+        break
+

@@ -23,8 +23,9 @@ SoulCast IV extracts frames from video sources (MP4, MKV, AVI, WebM, MOV) and an
 $$\text{Bytes per Frame} = \left\lceil \frac{\text{Width}}{8} \right\rceil \times \text{Height}$$
 
 For standard resolutions:
-- **128 x 64:** 16 bytes/row $\times$ 64 rows = **1,024 bytes / frame**
-- **128 x 32:** 16 bytes/row $\times$ 32 rows = **512 bytes / frame**
+- **240 x 240:** 30 bytes/row $\times$ 240 rows = **7,200 bytes / frame** (ST7789 / GC9A01 smartwatch displays)
+- **128 x 64:** 16 bytes/row $\times$ 64 rows = **1,024 bytes / frame** (SSD1306 standard)
+- **128 x 32:** 16 bytes/row $\times$ 32 rows = **512 bytes / frame** (SSD1306 narrow)
 - **96 x 16:** 12 bytes/row $\times$ 16 rows = **192 bytes / frame**
 
 ---
@@ -191,34 +192,74 @@ void draw_frame_avr(Adafruit_SSD1306 &disp, uint16_t frame_index) {
 
 ---
 
-## 6. Running the SoulCast IV Web Tool Locally
+## 6. How to Run SoulCast IV
 
-### Prerequisites
+Choose the method that best fits your operating system and environment.
+
+---
+
+### Option A: Docker (Recommended for Linux Bluefin / Container-based Distros)
+
+A zero-configuration, single-container setup that builds the frontend and runs the backend with FFmpeg pre-installed, delivering the entire web app and API on a single port:
+
+```bash
+docker compose up -d
+```
+
+Or with pure Docker:
+```bash
+docker build -t soulcast-iv .
+docker run -p 8000:8000 soulcast-iv
+```
+
+Open your browser at:
+👉 **`http://localhost:8000`**
+
+---
+
+### Option B: One-Click Automated Scripts (Windows & Standard Linux)
+
+Automated scripts that verify dependencies, create the Python virtual environment (`venv`), install `requirements.txt`, install `npm` dependencies, and launch both backend and frontend concurrently:
+
+#### Windows:
+Double-click `run.bat` or run:
+```cmd
+run.bat
+```
+
+#### Linux / macOS:
+```bash
+chmod +x run.sh
+./run.sh
+```
+
+The script will launch the backend on `http://localhost:8000` and the frontend on `http://localhost:5173`.
+
+---
+
+### Option C: Manual Setup
+
+#### Prerequisites
 - Python 3.10+
 - Node.js 18+
-- FFmpeg installed and accessible in system `PATH`
+- FFmpeg installed in system `PATH`
 
-### Backend Setup (Virtual Environment)
+#### 1. Backend Setup
 ```bash
 cd backend
-
-# 1. Create and activate virtual environment
-# On Linux/macOS:
-python3 -m venv venv
-source venv/bin/activate
-
-# On Windows (PowerShell / Command Prompt):
 python -m venv venv
+
+# Activate venv
+# Linux / macOS:
+source venv/bin/activate
+# Windows:
 .\venv\Scripts\activate
 
-# 2. Install dependencies
 pip install -r requirements.txt
-
-# 3. Start development server
 uvicorn main:app --reload --port 8000
 ```
 
-### Frontend Setup
+#### 2. Frontend Setup
 ```bash
 cd frontend
 npm install

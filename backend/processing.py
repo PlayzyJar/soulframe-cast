@@ -264,7 +264,8 @@ class TaskManager:
                 with open(input_path, "wb") as f:
                     f.write(file_bytes)
             else:
-                img = Image.new('L', (w, h), 0)
+                input_path = task_dir / "input.png"
+                img = Image.new('L', (w, h), 128)
                 img.save(input_path)
 
             await task.update_progress(20, "Extracting video frames with FFmpeg...")

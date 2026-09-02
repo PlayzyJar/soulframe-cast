@@ -23,9 +23,12 @@ export default function SettingsPanel({ settings, onSettingsChange }) {
             onChange={handleChange}
             className="p-3 border-4 border-foreground bg-background text-foreground font-mono focus:outline-none focus:ring-4 focus:ring-accent appearance-none cursor-pointer"
           >
-            <option value="128x64">128x64</option>
-            <option value="256x128">256x128</option>
-            <option value="64x32">64x32</option>
+            <option value="128x64">128x64 (SSD1306 Standard)</option>
+            <option value="128x32">128x32 (SSD1306 Narrow)</option>
+            <option value="240x240">240x240 (ST7789 / GC9A01)</option>
+            <option value="128x128">128x128 (Square 1.44")</option>
+            <option value="256x128">256x128 (Wide Display)</option>
+            <option value="64x32">64x32 (Mini Display)</option>
           </select>
         </div>
 

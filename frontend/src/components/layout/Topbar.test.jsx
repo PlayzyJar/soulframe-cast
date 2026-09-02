@@ -12,7 +12,7 @@ describe('Topbar', () => {
       </ThemeProvider>
     );
 
-    expect(screen.getByText('SoulCast IV')).toBeInTheDocument();
+    expect(screen.getAllByText('SoulCast IV')[0]).toBeInTheDocument();
   });
 
   it('toggles theme when button is clicked', () => {

@@ -135,3 +135,27 @@ async def test_task_manager_subscribe_nonexistent():
     async for sse_event in tm.subscribe_progress("non-existent"):
         events.append(sse_event)
     assert len(events) == 0
+
+
+@pytest.mark.anyio
+async def test_real_processing_240x240():
+    from pathlib import Path
+    tm = TaskManager()
+    task = tm.create_task()
+    
+    # Run real processing with 240x240 resolution (fallback generator produces test frame)
+    await tm.run_real_processing(
+        task=task,
+        file_bytes=None,
+        filename="test_smartwatch.mp4",
+        options={"resolution": "240x240", "fps": 10, "dithering": "floyd-steinberg"}
+    )
+
+    assert task.status == TaskStatus.COMPLETED
+    assert task.progress == 100
+    assert task.result is not None
+    assert task.result["resolution"] == "240x240"
+    assert task.result["bytes_per_frame"] == (240 * 240) // 8  # 7200 bytes
+    assert Path(task.result["header_path"]).exists()
+    assert Path(task.result["zip_path"]).exists()
+

@@ -182,8 +182,10 @@ export default function ConverterView() {
     formData.append('file', file);
     formData.append('settings', JSON.stringify(settings));
 
+    const API_BASE = import.meta.env.VITE_API_URL || '';
+
     try {
-      const response = await fetch('http://localhost:8000/process', {
+      const response = await fetch(`${API_BASE}/process`, {
         method: 'POST',
         body: formData,
       });
@@ -203,7 +205,8 @@ export default function ConverterView() {
   useEffect(() => {
     if (!taskId) return;
 
-    const eventSource = new EventSource(`http://localhost:8000/progress/${taskId}`);
+    const API_BASE = import.meta.env.VITE_API_URL || '';
+    const eventSource = new EventSource(`${API_BASE}/progress/${taskId}`);
 
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -251,8 +254,9 @@ export default function ConverterView() {
     // Dispatch real file download from backend server
     setTimeout(() => {
       if (completedTaskId) {
+        const API_BASE = import.meta.env.VITE_API_URL || '';
         const endpoint = type === 'zip' ? 'zip' : 'header';
-        const downloadUrl = `http://localhost:8000/download/${completedTaskId}/${endpoint}`;
+        const downloadUrl = `${API_BASE}/download/${completedTaskId}/${endpoint}`;
         const a = document.createElement('a');
         a.href = downloadUrl;
         a.download = targetFilename;

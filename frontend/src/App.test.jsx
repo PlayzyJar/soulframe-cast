@@ -12,7 +12,7 @@ describe('App', () => {
       </ThemeProvider>
     );
 
-    expect(screen.getByText('SoulCast IV')).toBeInTheDocument();
+    expect(screen.getAllByText('SoulCast IV')[0]).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /home/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /converter/i })).toBeInTheDocument();
     expect(screen.getByText('Welcome to SoulCast IV')).toBeInTheDocument();
@@ -29,7 +29,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /converter/i }));
     await waitFor(() => {
-      expect(screen.getByText('Converter View Placeholder')).toBeInTheDocument();
+      expect(screen.getByText('Drag & Drop')).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole('button', { name: /home/i }));
@@ -39,7 +39,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /start converting/i }));
     await waitFor(() => {
-      expect(screen.getByText('Converter View Placeholder')).toBeInTheDocument();
+      expect(screen.getByText('Drag & Drop')).toBeInTheDocument();
     });
   });
 });
