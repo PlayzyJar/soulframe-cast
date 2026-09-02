@@ -93,6 +93,62 @@ async def start_processing(
     )
 
 
+@app.post("/preview")
+async def get_preview(request: Request):
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        raise HTTPException(status_code=400, detail="Expected multipart/form-data")
+
+    form = await request.form()
+    uploaded_file = form.get("file")
+    if not uploaded_file or not hasattr(uploaded_file, "read"):
+        raise HTTPException(status_code=400, detail="Missing file in request")
+
+    filename = getattr(uploaded_file, "filename", "video.mp4") or "video.mp4"
+    file_bytes = await uploaded_file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty file provided")
+
+    timestamp_raw = form.get("timestamp_sec", 0.0)
+    try:
+        timestamp_sec = float(timestamp_raw)
+    except (ValueError, TypeError):
+        timestamp_sec = 0.0
+
+    resolution = "128x64"
+    color_mode = "monochrome"
+    dithering = "floyd-steinberg"
+
+    settings_raw = form.get("settings")
+    if settings_raw:
+        try:
+            if isinstance(settings_raw, str):
+                settings = json.loads(settings_raw)
+            elif isinstance(settings_raw, dict):
+                settings = settings_raw
+            else:
+                settings = {}
+            resolution = settings.get("resolution", resolution)
+            color_mode = settings.get("color_mode", color_mode)
+            dithering = settings.get("dithering", dithering)
+        except Exception:
+            pass
+
+    try:
+        result = await asyncio.to_thread(
+            task_manager.extract_preview_frame,
+            file_bytes=file_bytes,
+            filename=filename,
+            timestamp_sec=timestamp_sec,
+            resolution=resolution,
+            color_mode=color_mode,
+            dithering=dithering,
+        )
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.get("/progress/{task_id}")
 async def get_progress(task_id: str):
     task = task_manager.get_task(task_id)

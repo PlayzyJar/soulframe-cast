@@ -4,12 +4,15 @@ Extracts frames using FFmpeg, applies 1-bit binarization & dithering,
 generates C++ PROGMEM headers and ZIP bundles for microcontrollers.
 """
 import asyncio
+import base64
+import io
 import json
 import math
 import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import uuid
 import zipfile
 from enum import Enum
@@ -143,6 +146,135 @@ def convert_frame_by_mode(
         dithered = convert_frame_to_1bit(img, dithering)
         packed = pack_1bit_pixels(dithered)
         return packed, dithered
+
+
+def format_frame_size(num_bytes: int) -> str:
+    """Format byte count into human-readable string (e.g. 112.5 KB, 1.0 KB, 512 B)."""
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    elif num_bytes < 1024 * 1024:
+        val = num_bytes / 1024
+        return f"{val:.1f} KB"
+    else:
+        val = num_bytes / (1024 * 1024)
+        return f"{val:.1f} MB"
+
+
+def extract_preview_frame(
+    file_bytes: Optional[bytes] = None,
+    filename: str = "video.mp4",
+    timestamp_sec: float = 0.0,
+    resolution: str = "128x64",
+    color_mode: str = "monochrome",
+    dithering: str = "floyd-steinberg",
+) -> Dict[str, Any]:
+    """
+    Extracts a single frame at timestamp_sec from video or image/GIF bytes,
+    processes it according to color_mode and dithering, and returns
+    a Base64 data URL with hardware frame metrics.
+    """
+    try:
+        w, h = map(int, resolution.split('x'))
+    except Exception:
+        w, h = 128, 64
+        resolution = "128x64"
+
+    try:
+        timestamp_sec = float(timestamp_sec)
+    except (ValueError, TypeError):
+        timestamp_sec = 0.0
+
+    mode = str(color_mode or "monochrome").lower()
+    dither_mode = str(dithering or "floyd-steinberg").lower()
+
+    # Calculate bytes_per_frame
+    if mode == "rgb565":
+        bytes_per_frame = w * h * 2
+    elif mode == "grayscale":
+        bytes_per_frame = w * h
+    else:
+        mode = "monochrome"
+        bytes_per_frame = math.ceil(w / 8) * h
+
+    formatted_size = format_frame_size(bytes_per_frame)
+
+    raw_frame: Optional[Image.Image] = None
+
+    with tempfile.TemporaryDirectory(prefix="soulcast_preview_") as temp_dir_str:
+        temp_dir = Path(temp_dir_str)
+        ext = Path(filename).suffix or ".mp4"
+        input_path = temp_dir / f"input{ext}"
+        out_frame_path = temp_dir / "preview_frame.png"
+
+        if file_bytes and len(file_bytes) > 0:
+            with open(input_path, "wb") as f:
+                f.write(file_bytes)
+        else:
+            # Fallback blank image
+            raw_frame = Image.new("RGB", (w, h), (128, 128, 128))
+
+        if raw_frame is None:
+            # 1. Attempt FFmpeg fast seek
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-ss", str(timestamp_sec),
+                "-i", str(input_path),
+                "-vframes", "1",
+                "-vf", f"scale={w}:{h}:flags=lanczos",
+                str(out_frame_path),
+            ]
+            try:
+                subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+            if out_frame_path.exists() and out_frame_path.stat().st_size > 0:
+                try:
+                    with Image.open(out_frame_path) as im:
+                        raw_frame = im.convert("RGB")
+                except Exception:
+                    raw_frame = None
+
+        # 2. Fallback to PIL Image.open (for animated GIF or image files or if FFmpeg fails)
+        if raw_frame is None and input_path.exists() and input_path.stat().st_size > 0:
+            try:
+                with Image.open(input_path) as im:
+                    n_frames = getattr(im, "n_frames", 1)
+                    if n_frames > 1:
+                        frame_duration_ms = im.info.get("duration", 100) or 100
+                        target_frame = int((timestamp_sec * 1000) / frame_duration_ms)
+                        frame_idx = min(max(0, target_frame), n_frames - 1)
+                        im.seek(frame_idx)
+                    raw_frame = im.convert("RGB").resize((w, h), Image.Resampling.LANCZOS)
+            except Exception:
+                pass
+
+        if raw_frame is None:
+            raw_frame = Image.new("RGB", (w, h), (0, 0, 0))
+
+        # Convert frame using unified converter
+        _, converted_img = convert_frame_by_mode(raw_frame, mode, dither_mode)
+
+        # Encode to PNG base64
+        buf = io.BytesIO()
+        converted_img.save(buf, format="PNG")
+        b64_str = base64.b64encode(buf.getvalue()).decode("ascii")
+        preview_data_url = f"data:image/png;base64,{b64_str}"
+
+        return {
+            "preview_image": preview_data_url,
+            "resolution": resolution,
+            "color_mode": mode,
+            "bytes_per_frame": bytes_per_frame,
+            "formatted_frame_size": formatted_size,
+            "timestamp_sec": timestamp_sec,
+        }
 
 
 def generate_cpp_header(
@@ -326,6 +458,24 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[Task]:
         return self.tasks.get(task_id)
 
+    def extract_preview_frame(
+        self,
+        file_bytes: Optional[bytes] = None,
+        filename: str = "video.mp4",
+        timestamp_sec: float = 0.0,
+        resolution: str = "128x64",
+        color_mode: str = "monochrome",
+        dithering: str = "floyd-steinberg",
+    ) -> Dict[str, Any]:
+        return extract_preview_frame(
+            file_bytes=file_bytes,
+            filename=filename,
+            timestamp_sec=timestamp_sec,
+            resolution=resolution,
+            color_mode=color_mode,
+            dithering=dithering,
+        )
+
     async def run_real_processing(
         self,
         task: Task,
@@ -354,6 +504,7 @@ class TaskManager:
 
         try:
             await task.update_progress(10, "Saving uploaded media...")
+            await asyncio.sleep(0)
             input_ext = Path(filename).suffix or ".mp4"
             input_path = task_dir / f"input{input_ext}"
 
@@ -365,25 +516,105 @@ class TaskManager:
                 img = Image.new('RGB', (w, h), (128, 128, 128))
                 img.save(input_path)
 
-            await task.update_progress(20, "Extracting video frames with FFmpeg...")
-            
-            # Run FFmpeg synchronously in a thread pool (reliable on all Windows async loops)
-            frame_pattern = task_dir / "raw_frame_%05d.png"
-            def run_ffmpeg():
-                cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-i", str(input_path),
-                    "-vf", f"fps={fps},scale={w}:{h}:flags=lanczos",
-                    str(frame_pattern)
-                ]
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                return res.returncode, res.stderr.decode('utf-8', errors='ignore')
+            estimated_total_frames = int(options.get("total_frames", 0) or options.get("estimated_total_frames", 0))
+            if estimated_total_frames <= 0:
+                try:
+                    with Image.open(input_path) as im:
+                        if getattr(im, "n_frames", 1) > 1:
+                            estimated_total_frames = im.n_frames
+                except Exception:
+                    pass
 
-            retcode, ffmpeg_err = await asyncio.to_thread(run_ffmpeg)
-            
+            await task.update_progress(10, "Extracting video frames with FFmpeg...")
+            await asyncio.sleep(0)
+
+            frame_pattern = task_dir / "raw_frame_%05d.png"
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", str(input_path),
+                "-vf", f"fps={fps},scale={w}:{h}:flags=lanczos",
+                "-progress", "pipe:1",
+                str(frame_pattern),
+            ]
+
+            loop = asyncio.get_running_loop()
+            progress_queue: asyncio.Queue = asyncio.Queue()
+
+            def ffmpeg_worker():
+                try:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        bufsize=1,
+                        encoding="utf-8",
+                        errors="ignore",
+                    )
+                except Exception as exc:
+                    loop.call_soon_threadsafe(progress_queue.put_nowait, ("error", str(exc)))
+                    return
+
+                stderr_lines = []
+
+                def read_stderr():
+                    try:
+                        for err_line in proc.stderr:
+                            stderr_lines.append(err_line)
+                    except Exception:
+                        pass
+
+                stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+                stderr_thread.start()
+
+                try:
+                    for line in proc.stdout:
+                        line = line.strip()
+                        if line.startswith("frame="):
+                            try:
+                                frame_val = int(line.split("=")[1].strip())
+                                loop.call_soon_threadsafe(
+                                    progress_queue.put_nowait, ("frame", frame_val)
+                                )
+                            except ValueError:
+                                pass
+                except Exception:
+                    pass
+
+                proc.wait()
+                stderr_thread.join(timeout=2)
+                err_text = "".join(stderr_lines)
+                loop.call_soon_threadsafe(
+                    progress_queue.put_nowait, ("done", (proc.returncode, err_text))
+                )
+
+            worker = threading.Thread(target=ffmpeg_worker, daemon=True)
+            worker.start()
+
+            last_extract_prog = 10
+            ffmpeg_err = ""
+            while True:
+                msg_type, data = await progress_queue.get()
+                if msg_type == "frame":
+                    current_frame = data
+                    if estimated_total_frames > 0:
+                        cur_prog = min(39, 10 + int(30 * (current_frame / estimated_total_frames)))
+                    else:
+                        cur_prog = min(39, 10 + min(29, current_frame))
+                    if cur_prog > last_extract_prog or current_frame % 5 == 0:
+                        last_extract_prog = cur_prog
+                        await task.update_progress(cur_prog, f"Extracting frame {current_frame}...")
+                        await asyncio.sleep(0)
+                elif msg_type == "done":
+                    retcode, ffmpeg_err = data
+                    break
+                elif msg_type == "error":
+                    ffmpeg_err = data
+                    break
+
             raw_files = sorted(task_dir.glob("raw_frame_*.png"))
-            
+
             # Fallback to PIL extraction if ffmpeg didn't produce frames (e.g. animated GIF)
             if not raw_files:
                 try:
@@ -411,10 +642,12 @@ class TaskManager:
                     else f"Binarizing & dithering {total_frames} frames ({dithering})..."
                 )
             )
-            await task.update_progress(35, stage_desc)
+            await task.update_progress(40, stage_desc)
+            await asyncio.sleep(0)
 
             packed_bytes_list = []
             preview_png_paths = []
+            last_reported_prog = 40
 
             for idx, raw_file_path in enumerate(raw_files):
                 with Image.open(raw_file_path) as raw_img:
@@ -425,12 +658,18 @@ class TaskManager:
                     preview_img.save(png_path)
                     preview_png_paths.append(png_path)
 
-                # Incremental progress reporting
-                if total_frames > 0 and ((idx + 1) % max(1, total_frames // 10) == 0 or idx == total_frames - 1):
-                    cur_prog = 35 + int(50 * (idx + 1) / total_frames)
-                    await task.update_progress(cur_prog, f"Processing frame {idx + 1}/{total_frames}...")
+                cur_prog = 40 + int(50 * (idx + 1) / total_frames)
+                if (
+                    (idx == total_frames - 1)
+                    or ((idx + 1) % 10 == 0)
+                    or (cur_prog >= last_reported_prog + 5)
+                ):
+                    await task.update_progress(cur_prog, f"Encoding frame {idx + 1}/{total_frames} ({color_mode})...")
+                    await asyncio.sleep(0)
+                    last_reported_prog = cur_prog
 
-            await task.update_progress(88, f"Compiling C++ header and ZIP bundle for {total_frames} frames...")
+            await task.update_progress(90, f"Compiling C++ header and ZIP bundle for {total_frames} frames...")
+            await asyncio.sleep(0)
 
             # 1. Generate C++ Header
             header_str = generate_cpp_header(filename, resolution, fps, dithering, color_mode, packed_bytes_list)

@@ -287,4 +287,114 @@ def test_cpp_header_backward_compatibility():
     assert "const uint8_t PROGMEM test_legacy_frames[1][16] = {" in header
 
 
+def test_extract_preview_frame_rgb565():
+    from io import BytesIO
+    from PIL import Image
+    from processing import extract_preview_frame
+
+    buf = BytesIO()
+    Image.new("RGB", (32, 32), (0, 255, 0)).save(buf, format="PNG")
+    result = extract_preview_frame(
+        file_bytes=buf.getvalue(),
+        filename="green.png",
+        timestamp_sec=0.0,
+        resolution="32x32",
+        color_mode="rgb565",
+        dithering="none"
+    )
+
+    assert result["resolution"] == "32x32"
+    assert result["color_mode"] == "rgb565"
+    assert result["bytes_per_frame"] == 32 * 32 * 2
+    assert result["formatted_frame_size"] == "2.0 KB"
+    assert result["preview_image"].startswith("data:image/png;base64,")
+    assert result["timestamp_sec"] == 0.0
+
+
+def test_extract_preview_frame_monochrome():
+    from io import BytesIO
+    from PIL import Image
+    from processing import extract_preview_frame
+
+    buf = BytesIO()
+    Image.new("RGB", (128, 64), (255, 255, 255)).save(buf, format="PNG")
+    result = extract_preview_frame(
+        file_bytes=buf.getvalue(),
+        filename="white.png",
+        timestamp_sec=1.0,
+        resolution="128x64",
+        color_mode="monochrome",
+        dithering="floyd-steinberg"
+    )
+
+    assert result["resolution"] == "128x64"
+    assert result["color_mode"] == "monochrome"
+    assert result["bytes_per_frame"] == 1024
+    assert result["formatted_frame_size"] == "1.0 KB"
+    assert result["preview_image"].startswith("data:image/png;base64,")
+    assert result["timestamp_sec"] == 1.0
+
+
+def test_extract_preview_frame_grayscale():
+    from io import BytesIO
+    from PIL import Image
+    from processing import extract_preview_frame
+
+    buf = BytesIO()
+    Image.new("RGB", (50, 50), (128, 128, 128)).save(buf, format="PNG")
+    result = extract_preview_frame(
+        file_bytes=buf.getvalue(),
+        filename="gray.png",
+        timestamp_sec=0.5,
+        resolution="50x50",
+        color_mode="grayscale",
+        dithering="none"
+    )
+
+    assert result["resolution"] == "50x50"
+    assert result["color_mode"] == "grayscale"
+    assert result["bytes_per_frame"] == 2500
+    assert result["formatted_frame_size"] == f"{2500 / 1024:.1f} KB"
+    assert result["preview_image"].startswith("data:image/png;base64,")
+    assert result["timestamp_sec"] == 0.5
+
+
+@pytest.mark.anyio
+async def test_real_processing_streaming_progress_events():
+    tm = TaskManager()
+    task = tm.create_task({"filename": "stream_test.mp4"})
+
+    async def collect_events():
+        events = []
+        async for sse_event in tm.subscribe_progress(task.task_id):
+            raw = sse_event.replace("data: ", "").strip()
+            if raw:
+                data = json.loads(raw)
+                events.append(data)
+                if data.get("status") == "completed":
+                    break
+        return events
+
+    collector = asyncio.create_task(collect_events())
+    await asyncio.sleep(0.01)
+
+    await tm.run_real_processing(
+        task=task,
+        file_bytes=None,
+        filename="stream_test.mp4",
+        options={"resolution": "16x16", "fps": 5, "color_mode": "rgb565"}
+    )
+
+    events = await collector
+    assert len(events) >= 3
+    progresses = [e["progress"] for e in events]
+    assert 10 in progresses
+    assert 100 in progresses
+    stages = [e.get("stage", "") for e in events]
+    assert any("Extracting" in s or "Saving" in s for s in stages)
+    assert any("Conversion complete" in s for s in stages)
+
+
+
+
 
