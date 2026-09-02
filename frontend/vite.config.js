@@ -10,6 +10,7 @@ export default defineConfig({
       '/progress': 'http://localhost:8000',
       '/download': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
+      '/preview': 'http://localhost:8000',
     },
   },
   test: {
