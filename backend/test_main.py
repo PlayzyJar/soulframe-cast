@@ -115,3 +115,90 @@ def test_start_processing_multipart():
     assert task.payload["filename"] == "test_video.mp4"
     assert task.payload["options"]["resolution"] == "128x64"
 
+
+def test_preview_endpoint_rgb565():
+    from io import BytesIO
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (64, 64), (255, 0, 0)).save(buf, format="PNG")
+    buf.seek(0)
+
+    response = client.post(
+        "/preview",
+        files={"file": ("test.png", buf.getvalue(), "image/png")},
+        data={
+            "timestamp_sec": "0.0",
+            "settings": json.dumps({"resolution": "64x64", "color_mode": "rgb565", "dithering": "none"}),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "preview_image" in data
+    assert data["preview_image"].startswith("data:image/png;base64,")
+    assert data["bytes_per_frame"] == 64 * 64 * 2  # 8192 bytes
+    assert data["color_mode"] == "rgb565"
+    assert data["resolution"] == "64x64"
+    assert data["formatted_frame_size"] == "8.0 KB"
+    assert data["timestamp_sec"] == 0.0
+
+
+def test_preview_endpoint_monochrome():
+    from io import BytesIO
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (128, 64), (255, 255, 255)).save(buf, format="PNG")
+    buf.seek(0)
+
+    response = client.post(
+        "/preview",
+        files={"file": ("test.png", buf.getvalue(), "image/png")},
+        data={
+            "timestamp_sec": "1.5",
+            "settings": json.dumps({"resolution": "128x64", "color_mode": "monochrome", "dithering": "floyd-steinberg"}),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "preview_image" in data
+    assert data["preview_image"].startswith("data:image/png;base64,")
+    assert data["bytes_per_frame"] == 16 * 64  # 1024 bytes
+    assert data["color_mode"] == "monochrome"
+    assert data["resolution"] == "128x64"
+    assert data["formatted_frame_size"] == "1.0 KB"
+    assert data["timestamp_sec"] == 1.5
+
+
+def test_preview_endpoint_grayscale():
+    from io import BytesIO
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (64, 64), (128, 128, 128)).save(buf, format="PNG")
+    buf.seek(0)
+
+    response = client.post(
+        "/preview",
+        files={"file": ("test.png", buf.getvalue(), "image/png")},
+        data={
+            "timestamp_sec": "2.0",
+            "settings": json.dumps({"resolution": "64x64", "color_mode": "grayscale", "dithering": "none"}),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "preview_image" in data
+    assert data["preview_image"].startswith("data:image/png;base64,")
+    assert data["bytes_per_frame"] == 64 * 64  # 4096 bytes
+    assert data["color_mode"] == "grayscale"
+    assert data["resolution"] == "64x64"
+    assert data["formatted_frame_size"] == "4.0 KB"
+    assert data["timestamp_sec"] == 2.0
+
+
+def test_preview_endpoint_no_file():
+    response = client.post("/preview")
+    assert response.status_code in (400, 422)
+
+

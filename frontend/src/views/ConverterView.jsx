@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Download, FileCode, CheckCircle2, RotateCcw, X, Sparkles, Loader2 } from 'lucide-react';
 import UploadZone from '../components/UploadZone';
 import SettingsPanel from '../components/SettingsPanel';
 import ProgressBar from '../components/ProgressBar';
+import PreviewCard from '../components/PreviewCard';
 
 // Minimal in-browser ZIP generator (PKZIP Store format)
 function createSimpleZipBlob(files) {
@@ -150,7 +151,8 @@ export default function ConverterView() {
   const [settings, setSettings] = useState({
     resolution: '128x64',
     fps: 15,
-    dithering: 'floyd-steinberg'
+    dithering: 'floyd-steinberg',
+    color_mode: 'monochrome'
   });
 
   const [taskId, setTaskId] = useState(null);
@@ -167,9 +169,76 @@ export default function ConverterView() {
     isComplete: false,
   });
 
+  const [previewData, setPreviewData] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
+  const [previewTimestamp, setPreviewTimestamp] = useState(0.0);
+
+  const hasPreviewRef = useRef(false);
+  useEffect(() => {
+    hasPreviewRef.current = !!previewData;
+  }, [previewData]);
+
+  const handleGeneratePreview = async (
+    targetTimestamp = previewTimestamp,
+    targetFile = file,
+    targetSettings = settings
+  ) => {
+    const fileToUse = targetFile || file;
+    if (!fileToUse) return;
+
+    setPreviewLoading(true);
+    setPreviewError(null);
+
+    const formData = new FormData();
+    formData.append('file', fileToUse);
+    formData.append('timestamp_sec', (targetTimestamp ?? 0.0).toString());
+    formData.append('settings', JSON.stringify(targetSettings || settings));
+
+    const API_BASE = import.meta.env.VITE_API_URL || '';
+
+    try {
+      const response = await fetch(`${API_BASE}/preview`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        let errMsg = `Server responded with status ${response.status}`;
+        try {
+          const errJson = await response.json();
+          if (errJson?.detail) errMsg = errJson.detail;
+        } catch {
+          // ignore
+        }
+        throw new Error(errMsg);
+      }
+
+      const data = await response.json();
+      setPreviewData(data);
+    } catch (err) {
+      setPreviewError(err.message || 'Failed to generate frame preview');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   const handleFileSelect = (selectedFile) => {
     setFile(selectedFile);
+    setPreviewData(null);
+    setPreviewError(null);
+    setPreviewTimestamp(0.0);
+    if (selectedFile) {
+      handleGeneratePreview(0.0, selectedFile, settings);
+    }
   };
+
+  // Re-fetch preview when settings change if a preview is currently active
+  useEffect(() => {
+    if (file && hasPreviewRef.current) {
+      handleGeneratePreview(previewTimestamp, file, settings);
+    }
+  }, [settings]);
 
   const startConversion = async () => {
     if (!file) return;
@@ -331,6 +400,9 @@ export default function ConverterView() {
         <button 
           onClick={() => {
             setFile(null);
+            setPreviewData(null);
+            setPreviewError(null);
+            setPreviewTimestamp(0.0);
             setProgressData({ progress: 0, stage: '', error: null, status: 'idle' });
           }}
           className="px-6 py-3 bg-background text-foreground text-lg font-bold uppercase border-4 border-foreground shadow-brutal hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all mt-auto flex items-center gap-2"
@@ -422,16 +494,29 @@ export default function ConverterView() {
         <h2 className="text-3xl font-extrabold uppercase tracking-tighter">Media</h2>
         <UploadZone onFileSelect={handleFileSelect} />
         {file && (
-          <div className="p-4 border-4 border-foreground shadow-brutal bg-accent/20 font-mono mt-4 flex items-center justify-between">
-            <div>
-              <span className="font-bold uppercase block text-sm mb-1">Selected File:</span> 
-              <span className="truncate block max-w-xs sm:max-w-md">{file.name}</span>
+          <>
+            <div className="p-4 border-4 border-foreground shadow-brutal bg-accent/20 font-mono mt-4 flex items-center justify-between">
+              <div>
+                <span className="font-bold uppercase block text-sm mb-1">Selected File:</span> 
+                <span className="truncate block max-w-xs sm:max-w-md">{file.name}</span>
+              </div>
+              <div className="text-right">
+                <span className="font-bold uppercase block text-sm mb-1">Size:</span> 
+                <span>{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+              </div>
             </div>
-            <div className="text-right">
-              <span className="font-bold uppercase block text-sm mb-1">Size:</span> 
-              <span>{(file.size / 1024 / 1024).toFixed(2)} MB</span>
-            </div>
-          </div>
+
+            <PreviewCard
+              file={file}
+              settings={settings}
+              previewData={previewData}
+              isLoading={previewLoading}
+              error={previewError}
+              timestamp={previewTimestamp}
+              onTimestampChange={setPreviewTimestamp}
+              onGeneratePreview={() => handleGeneratePreview(previewTimestamp, file, settings)}
+            />
+          </>
         )}
       </div>
       <div className="w-full lg:w-96 flex flex-col gap-4">

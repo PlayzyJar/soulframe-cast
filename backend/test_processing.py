@@ -159,3 +159,242 @@ async def test_real_processing_240x240():
     assert Path(task.result["header_path"]).exists()
     assert Path(task.result["zip_path"]).exists()
 
+
+def test_pack_rgb565_pixels():
+    from PIL import Image
+    from processing import pack_rgb565_pixels
+    # Red pixel (255, 0, 0) in RGB565 Big-Endian is 0xF800
+    img = Image.new("RGB", (2, 2), (255, 0, 0))
+    packed, sim_img = pack_rgb565_pixels(img)
+    assert len(packed) == 2 * 2 * 2  # 4 pixels * 2 bytes = 8 bytes
+    # First pixel 0xF800 in Big-Endian is [0xF8, 0x00]
+    assert packed[0] == 0xF8 and packed[1] == 0x00
+    assert packed == b"\xF8\x00" * 4
+    assert sim_img.size == (2, 2)
+    assert sim_img.mode == "RGB"
+    # Red pixel simulated: (255, 0, 0)
+    assert sim_img.getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_pack_grayscale_pixels():
+    from PIL import Image
+    from processing import pack_grayscale_pixels
+    img = Image.new("RGB", (2, 2), (128, 128, 128))
+    packed, sim_img = pack_grayscale_pixels(img)
+    assert len(packed) == 4  # 4 pixels * 1 byte
+    assert packed[0] == 128
+    assert packed == b"\x80\x80\x80\x80"
+    assert sim_img.size == (2, 2)
+    assert sim_img.mode == "L"
+
+
+def test_convert_frame_by_mode():
+    from PIL import Image
+    from processing import convert_frame_by_mode
+    img = Image.new("RGB", (2, 2), (255, 0, 0))
+
+    # RGB565
+    packed_rgb, sim_rgb = convert_frame_by_mode(img, "rgb565", "none")
+    assert len(packed_rgb) == 8
+    assert packed_rgb[:2] == b"\xF8\x00"
+
+    # Grayscale
+    packed_gray, sim_gray = convert_frame_by_mode(img, "grayscale", "none")
+    assert len(packed_gray) == 4
+
+    # Monochrome
+    packed_mono, sim_mono = convert_frame_by_mode(img, "monochrome", "none")
+    # For 2x2 image, packed into bytes horizontally: each row is 2 pixels = 1 byte packed
+    assert len(packed_mono) == 2
+
+
+def test_cpp_header_rgb565():
+    from processing import generate_cpp_header
+    frames_data = [b"\xF8\x00" * 4]  # 4 pixels of RGB565
+    header = generate_cpp_header("test.mp4", "2x2", 10, "none", "rgb565", frames_data)
+    assert "COLOR_MODE_RGB565" in header
+    assert "const uint16_t PROGMEM test_frames[1][4] = {" in header
+    assert "0xF800" in header
+    assert "DRAW_FRAME" in header
+
+
+def test_cpp_header_grayscale():
+    from processing import generate_cpp_header
+    frames_data = [b"\x80" * 4]  # 4 pixels of Grayscale
+    header = generate_cpp_header("test.mp4", "2x2", 10, "none", "grayscale", frames_data)
+    assert "COLOR_MODE_GRAYSCALE" in header
+    assert "const uint8_t PROGMEM test_frames[1][4] = {" in header
+    assert "0x80" in header
+
+
+@pytest.mark.anyio
+async def test_real_processing_rgb565():
+    from pathlib import Path
+    tm = TaskManager()
+    task = tm.create_task()
+
+    await tm.run_real_processing(
+        task=task,
+        file_bytes=None,
+        filename="test_color.mp4",
+        options={"resolution": "10x10", "fps": 5, "color_mode": "rgb565"}
+    )
+
+    assert task.status == TaskStatus.COMPLETED
+    assert task.progress == 100
+    assert task.result is not None
+    assert task.result["color_mode"] == "rgb565"
+    assert task.result["bytes_per_frame"] == 10 * 10 * 2
+    assert Path(task.result["header_path"]).exists()
+    assert Path(task.result["zip_path"]).exists()
+
+
+def test_pack_rgb565_primary_colors():
+    from PIL import Image
+    from processing import pack_rgb565_pixels
+
+    # Green (0, 255, 0) -> 0x07E0
+    green_img = Image.new("RGB", (1, 1), (0, 255, 0))
+    packed, sim = pack_rgb565_pixels(green_img)
+    assert packed == b"\x07\xE0"
+    assert sim.getpixel((0, 0)) == (0, 255, 0)
+
+    # Blue (0, 0, 255) -> 0x001F
+    blue_img = Image.new("RGB", (1, 1), (0, 0, 255))
+    packed, sim = pack_rgb565_pixels(blue_img)
+    assert packed == b"\x00\x1F"
+    assert sim.getpixel((0, 0)) == (0, 0, 255)
+
+    # White (255, 255, 255) -> 0xFFFF
+    white_img = Image.new("RGB", (1, 1), (255, 255, 255))
+    packed, sim = pack_rgb565_pixels(white_img)
+    assert packed == b"\xFF\xFF"
+    assert sim.getpixel((0, 0)) == (255, 255, 255)
+
+    # Black (0, 0, 0) -> 0x0000
+    black_img = Image.new("RGB", (1, 1), (0, 0, 0))
+    packed, sim = pack_rgb565_pixels(black_img)
+    assert packed == b"\x00\x00"
+    assert sim.getpixel((0, 0)) == (0, 0, 0)
+
+
+def test_cpp_header_backward_compatibility():
+    from processing import generate_cpp_header
+    frames_data = [b"\x00" * 16]
+    # Called with 5 positional arguments (original signature without color_mode)
+    header = generate_cpp_header("test_legacy.mp4", "16x8", 10, "floyd-steinberg", frames_data)
+    assert "COLOR_MODE_MONOCHROME" in header
+    assert "const uint8_t PROGMEM test_legacy_frames[1][16] = {" in header
+
+
+def test_extract_preview_frame_rgb565():
+    from io import BytesIO
+    from PIL import Image
+    from processing import extract_preview_frame
+
+    buf = BytesIO()
+    Image.new("RGB", (32, 32), (0, 255, 0)).save(buf, format="PNG")
+    result = extract_preview_frame(
+        file_bytes=buf.getvalue(),
+        filename="green.png",
+        timestamp_sec=0.0,
+        resolution="32x32",
+        color_mode="rgb565",
+        dithering="none"
+    )
+
+    assert result["resolution"] == "32x32"
+    assert result["color_mode"] == "rgb565"
+    assert result["bytes_per_frame"] == 32 * 32 * 2
+    assert result["formatted_frame_size"] == "2.0 KB"
+    assert result["preview_image"].startswith("data:image/png;base64,")
+    assert result["timestamp_sec"] == 0.0
+
+
+def test_extract_preview_frame_monochrome():
+    from io import BytesIO
+    from PIL import Image
+    from processing import extract_preview_frame
+
+    buf = BytesIO()
+    Image.new("RGB", (128, 64), (255, 255, 255)).save(buf, format="PNG")
+    result = extract_preview_frame(
+        file_bytes=buf.getvalue(),
+        filename="white.png",
+        timestamp_sec=1.0,
+        resolution="128x64",
+        color_mode="monochrome",
+        dithering="floyd-steinberg"
+    )
+
+    assert result["resolution"] == "128x64"
+    assert result["color_mode"] == "monochrome"
+    assert result["bytes_per_frame"] == 1024
+    assert result["formatted_frame_size"] == "1.0 KB"
+    assert result["preview_image"].startswith("data:image/png;base64,")
+    assert result["timestamp_sec"] == 1.0
+
+
+def test_extract_preview_frame_grayscale():
+    from io import BytesIO
+    from PIL import Image
+    from processing import extract_preview_frame
+
+    buf = BytesIO()
+    Image.new("RGB", (50, 50), (128, 128, 128)).save(buf, format="PNG")
+    result = extract_preview_frame(
+        file_bytes=buf.getvalue(),
+        filename="gray.png",
+        timestamp_sec=0.5,
+        resolution="50x50",
+        color_mode="grayscale",
+        dithering="none"
+    )
+
+    assert result["resolution"] == "50x50"
+    assert result["color_mode"] == "grayscale"
+    assert result["bytes_per_frame"] == 2500
+    assert result["formatted_frame_size"] == f"{2500 / 1024:.1f} KB"
+    assert result["preview_image"].startswith("data:image/png;base64,")
+    assert result["timestamp_sec"] == 0.5
+
+
+@pytest.mark.anyio
+async def test_real_processing_streaming_progress_events():
+    tm = TaskManager()
+    task = tm.create_task({"filename": "stream_test.mp4"})
+
+    async def collect_events():
+        events = []
+        async for sse_event in tm.subscribe_progress(task.task_id):
+            raw = sse_event.replace("data: ", "").strip()
+            if raw:
+                data = json.loads(raw)
+                events.append(data)
+                if data.get("status") == "completed":
+                    break
+        return events
+
+    collector = asyncio.create_task(collect_events())
+    await asyncio.sleep(0.01)
+
+    await tm.run_real_processing(
+        task=task,
+        file_bytes=None,
+        filename="stream_test.mp4",
+        options={"resolution": "16x16", "fps": 5, "color_mode": "rgb565"}
+    )
+
+    events = await collector
+    assert len(events) >= 3
+    progresses = [e["progress"] for e in events]
+    assert 10 in progresses
+    assert 100 in progresses
+    stages = [e.get("stage", "") for e in events]
+    assert any("Extracting" in s or "Saving" in s for s in stages)
+    assert any("Conversion complete" in s for s in stages)
+
+
+
+
+

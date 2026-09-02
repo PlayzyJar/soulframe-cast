@@ -4,12 +4,15 @@ Extracts frames using FFmpeg, applies 1-bit binarization & dithering,
 generates C++ PROGMEM headers and ZIP bundles for microcontrollers.
 """
 import asyncio
+import base64
+import io
 import json
 import math
 import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import uuid
 import zipfile
 from enum import Enum
@@ -91,24 +94,227 @@ def pack_1bit_pixels(img_1bit: Image.Image) -> bytes:
     return packed.tobytes()
 
 
+def pack_rgb565_pixels(img: Image.Image) -> tuple[bytes, Image.Image]:
+    """
+    Pack RGB PIL Image into 16-bit Big-Endian RGB565 format (uint16_t).
+    Also generates a simulated 16-bit quantized RGB Image for preview/export.
+    """
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    arr = np.array(img, dtype=np.uint16)
+    r = arr[:, :, 0]
+    g = arr[:, :, 1]
+    b = arr[:, :, 2]
+
+    # Calculate 16-bit RGB565: ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+    rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+    packed_bytes = rgb565.astype(">u2").tobytes()
+
+    # Generate simulated 16-bit quantized RGB Image for preview/export:
+    sim_r = ((r >> 3) * 255 // 31).astype(np.uint8)
+    sim_g = ((g >> 2) * 255 // 63).astype(np.uint8)
+    sim_b = ((b >> 3) * 255 // 31).astype(np.uint8)
+    sim_img = Image.fromarray(np.stack([sim_r, sim_g, sim_b], axis=-1), mode="RGB")
+
+    return packed_bytes, sim_img
+
+
+def pack_grayscale_pixels(img: Image.Image) -> tuple[bytes, Image.Image]:
+    """
+    Pack PIL Image into 8-bit Grayscale format.
+    Extract raw bytes img.tobytes() (length = W * H).
+    Returns (packed_bytes, grayscale_image).
+    """
+    img_gray = img.convert("L")
+    return img_gray.tobytes(), img_gray
+
+
+def convert_frame_by_mode(
+    img: Image.Image,
+    color_mode: str = "monochrome",
+    dithering: str = "floyd-steinberg"
+) -> tuple[bytes, Image.Image]:
+    """
+    Unified frame converter supporting RGB565, Grayscale, and Monochrome.
+    """
+    mode = str(color_mode or "monochrome").lower()
+    if mode == "rgb565":
+        return pack_rgb565_pixels(img.convert("RGB"))
+    elif mode == "grayscale":
+        return pack_grayscale_pixels(img)
+    else:
+        dithered = convert_frame_to_1bit(img, dithering)
+        packed = pack_1bit_pixels(dithered)
+        return packed, dithered
+
+
+def format_frame_size(num_bytes: int) -> str:
+    """Format byte count into human-readable string (e.g. 112.5 KB, 1.0 KB, 512 B)."""
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    elif num_bytes < 1024 * 1024:
+        val = num_bytes / 1024
+        return f"{val:.1f} KB"
+    else:
+        val = num_bytes / (1024 * 1024)
+        return f"{val:.1f} MB"
+
+
+def extract_preview_frame(
+    file_bytes: Optional[bytes] = None,
+    filename: str = "video.mp4",
+    timestamp_sec: float = 0.0,
+    resolution: str = "128x64",
+    color_mode: str = "monochrome",
+    dithering: str = "floyd-steinberg",
+) -> Dict[str, Any]:
+    """
+    Extracts a single frame at timestamp_sec from video or image/GIF bytes,
+    processes it according to color_mode and dithering, and returns
+    a Base64 data URL with hardware frame metrics.
+    """
+    try:
+        w, h = map(int, resolution.split('x'))
+    except Exception:
+        w, h = 128, 64
+        resolution = "128x64"
+
+    try:
+        timestamp_sec = float(timestamp_sec)
+    except (ValueError, TypeError):
+        timestamp_sec = 0.0
+
+    mode = str(color_mode or "monochrome").lower()
+    dither_mode = str(dithering or "floyd-steinberg").lower()
+
+    # Calculate bytes_per_frame
+    if mode == "rgb565":
+        bytes_per_frame = w * h * 2
+    elif mode == "grayscale":
+        bytes_per_frame = w * h
+    else:
+        mode = "monochrome"
+        bytes_per_frame = math.ceil(w / 8) * h
+
+    formatted_size = format_frame_size(bytes_per_frame)
+
+    raw_frame: Optional[Image.Image] = None
+
+    with tempfile.TemporaryDirectory(prefix="soulcast_preview_") as temp_dir_str:
+        temp_dir = Path(temp_dir_str)
+        ext = Path(filename).suffix or ".mp4"
+        input_path = temp_dir / f"input{ext}"
+        out_frame_path = temp_dir / "preview_frame.png"
+
+        if file_bytes and len(file_bytes) > 0:
+            with open(input_path, "wb") as f:
+                f.write(file_bytes)
+        else:
+            # Fallback blank image
+            raw_frame = Image.new("RGB", (w, h), (128, 128, 128))
+
+        if raw_frame is None:
+            # 1. Attempt FFmpeg fast seek
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-ss", str(timestamp_sec),
+                "-i", str(input_path),
+                "-vframes", "1",
+                "-vf", f"scale={w}:{h}:flags=lanczos",
+                str(out_frame_path),
+            ]
+            try:
+                subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+            if out_frame_path.exists() and out_frame_path.stat().st_size > 0:
+                try:
+                    with Image.open(out_frame_path) as im:
+                        raw_frame = im.convert("RGB")
+                except Exception:
+                    raw_frame = None
+
+        # 2. Fallback to PIL Image.open (for animated GIF or image files or if FFmpeg fails)
+        if raw_frame is None and input_path.exists() and input_path.stat().st_size > 0:
+            try:
+                with Image.open(input_path) as im:
+                    n_frames = getattr(im, "n_frames", 1)
+                    if n_frames > 1:
+                        frame_duration_ms = im.info.get("duration", 100) or 100
+                        target_frame = int((timestamp_sec * 1000) / frame_duration_ms)
+                        frame_idx = min(max(0, target_frame), n_frames - 1)
+                        im.seek(frame_idx)
+                    raw_frame = im.convert("RGB").resize((w, h), Image.Resampling.LANCZOS)
+            except Exception:
+                pass
+
+        if raw_frame is None:
+            raw_frame = Image.new("RGB", (w, h), (0, 0, 0))
+
+        # Convert frame using unified converter
+        _, converted_img = convert_frame_by_mode(raw_frame, mode, dither_mode)
+
+        # Encode to PNG base64
+        buf = io.BytesIO()
+        converted_img.save(buf, format="PNG")
+        b64_str = base64.b64encode(buf.getvalue()).decode("ascii")
+        preview_data_url = f"data:image/png;base64,{b64_str}"
+
+        return {
+            "preview_image": preview_data_url,
+            "resolution": resolution,
+            "color_mode": mode,
+            "bytes_per_frame": bytes_per_frame,
+            "formatted_frame_size": formatted_size,
+            "timestamp_sec": timestamp_sec,
+        }
+
+
 def generate_cpp_header(
     filename: str,
     resolution: str,
     fps: int,
     dithering: str,
-    frames_packed_bytes: List[bytes],
+    color_mode: Any = "monochrome",
+    frames_packed_bytes: Optional[List[bytes]] = None,
 ) -> str:
-    """Generate Arduino / ESP32 C++ PROGMEM header file."""
+    """Generate Arduino / ESP32 C++ PROGMEM header file for RGB565, Grayscale, or Monochrome."""
+    if isinstance(color_mode, list):
+        frames_packed_bytes = color_mode
+        color_mode = "monochrome"
+
+    frames_packed_bytes = frames_packed_bytes or []
+    mode = str(color_mode or "monochrome").lower()
     w, h = map(int, resolution.split('x'))
     safe_name = "".join(c if c.isalnum() else "_" for c in Path(filename).stem) or "animation"
     total_frames = len(frames_packed_bytes)
-    bytes_per_frame = len(frames_packed_bytes[0]) if total_frames > 0 else (w * h // 8)
+
+    if mode == "rgb565":
+        bytes_per_frame = len(frames_packed_bytes[0]) if total_frames > 0 else (w * h * 2)
+        total_elements = w * h
+        type_str = "uint16_t"
+    elif mode == "grayscale":
+        bytes_per_frame = len(frames_packed_bytes[0]) if total_frames > 0 else (w * h)
+        total_elements = w * h
+        type_str = "uint8_t"
+    else:
+        mode = "monochrome"
+        bytes_per_frame = len(frames_packed_bytes[0]) if total_frames > 0 else (w * h // 8)
+        total_elements = bytes_per_frame
+        type_str = "uint8_t"
 
     lines = [
         "// ==========================================================================",
-        "// SoulCast IV - 1-Bit Microcontroller Animation Frame Buffer",
+        f"// SoulCast IV - Microcontroller Animation Frame Buffer ({mode.upper()})",
         f"// Source File: {filename}",
-        f"// Resolution: {w}x{h} px | Framerate: {fps} FPS | Dither: {dithering}",
+        f"// Resolution: {w}x{h} px | Framerate: {fps} FPS | Mode: {mode} | Dither: {dithering}",
         f"// Total Frames: {total_frames} | Bytes per Frame: {bytes_per_frame} bytes",
         f"// Total Memory: {total_frames * bytes_per_frame} bytes",
         "// ==========================================================================",
@@ -124,23 +330,45 @@ def generate_cpp_header(
         "  #define PROGMEM",
         "#endif",
         "",
-        f"#define {safe_name.upper()}_FRAME_WIDTH  {w}",
-        f"#define {safe_name.upper()}_FRAME_HEIGHT {h}",
-        f"#define {safe_name.upper()}_FRAME_COUNT  {total_frames}",
-        f"#define {safe_name.upper()}_FPS          {fps}",
-        f"#define {safe_name.upper()}_FRAME_SIZE   {bytes_per_frame}",
-        "",
-        f"// Frame data in standard monochrome 1-bit format (MSB first)",
-        f"const uint8_t PROGMEM {safe_name}_frames[{total_frames}][{bytes_per_frame}] = {{",
+        f"#define {safe_name.upper()}_WIDTH         {w}",
+        f"#define {safe_name.upper()}_HEIGHT        {h}",
+        f"#define {safe_name.upper()}_FRAME_WIDTH   {w}",
+        f"#define {safe_name.upper()}_FRAME_HEIGHT  {h}",
+        f"#define {safe_name.upper()}_FRAME_COUNT   {total_frames}",
+        f"#define {safe_name.upper()}_FPS           {fps}",
+        f"#define {safe_name.upper()}_FRAME_SIZE    {bytes_per_frame}",
     ]
 
+    if mode == "rgb565":
+        lines.append("#define COLOR_MODE_RGB565")
+        lines.append(
+            f"#define DRAW_FRAME(tft, frame_idx) tft.pushImage(0, 0, {safe_name.upper()}_WIDTH, {safe_name.upper()}_HEIGHT, (uint16_t*){safe_name}_frames[frame_idx])"
+        )
+        lines.append("")
+        lines.append("// Frame data in 16-bit Big-Endian RGB565 format")
+    elif mode == "grayscale":
+        lines.append("#define COLOR_MODE_GRAYSCALE")
+        lines.append("")
+        lines.append("// Frame data in 8-bit grayscale format (0-255)")
+    else:
+        lines.append("#define COLOR_MODE_MONOCHROME")
+        lines.append("")
+        lines.append("// Frame data in standard monochrome 1-bit format (MSB first)")
+
+    lines.append(f"const {type_str} PROGMEM {safe_name}_frames[{total_frames}][{total_elements}] = {{")
+
     for frame_idx, frame_data in enumerate(frames_packed_bytes):
-        hex_bytes = [f"0x{b:02X}" for b in frame_data]
+        if mode == "rgb565":
+            vals = np.frombuffer(frame_data, dtype=">u2")
+            hex_items = [f"0x{int(v):04X}" for v in vals]
+        else:
+            hex_items = [f"0x{b:02X}" for b in frame_data]
+
         formatted_rows = []
         row_size = 16
-        for i in range(0, len(hex_bytes), row_size):
-            formatted_rows.append("    " + ", ".join(hex_bytes[i:i + row_size]))
-        
+        for i in range(0, len(hex_items), row_size):
+            formatted_rows.append("    " + ", ".join(hex_items[i:i + row_size]))
+
         comma = "," if frame_idx < total_frames - 1 else ""
         lines.append(f"  // --- Frame {frame_idx} ---")
         lines.append("  {")
@@ -230,6 +458,24 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[Task]:
         return self.tasks.get(task_id)
 
+    def extract_preview_frame(
+        self,
+        file_bytes: Optional[bytes] = None,
+        filename: str = "video.mp4",
+        timestamp_sec: float = 0.0,
+        resolution: str = "128x64",
+        color_mode: str = "monochrome",
+        dithering: str = "floyd-steinberg",
+    ) -> Dict[str, Any]:
+        return extract_preview_frame(
+            file_bytes=file_bytes,
+            filename=filename,
+            timestamp_sec=timestamp_sec,
+            resolution=resolution,
+            color_mode=color_mode,
+            dithering=dithering,
+        )
+
     async def run_real_processing(
         self,
         task: Task,
@@ -242,6 +488,7 @@ class TaskManager:
         resolution = options.get("resolution", "128x64")
         fps = int(options.get("fps", 15))
         dithering = options.get("dithering", "floyd-steinberg")
+        color_mode = options.get("color_mode", "monochrome")
 
         try:
             w, h = map(int, resolution.split('x'))
@@ -257,6 +504,7 @@ class TaskManager:
 
         try:
             await task.update_progress(10, "Saving uploaded media...")
+            await asyncio.sleep(0)
             input_ext = Path(filename).suffix or ".mp4"
             input_path = task_dir / f"input{input_ext}"
 
@@ -265,28 +513,108 @@ class TaskManager:
                     f.write(file_bytes)
             else:
                 input_path = task_dir / "input.png"
-                img = Image.new('L', (w, h), 128)
+                img = Image.new('RGB', (w, h), (128, 128, 128))
                 img.save(input_path)
 
-            await task.update_progress(20, "Extracting video frames with FFmpeg...")
-            
-            # Run FFmpeg synchronously in a thread pool (reliable on all Windows async loops)
-            frame_pattern = task_dir / "raw_frame_%05d.png"
-            def run_ffmpeg():
-                cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-i", str(input_path),
-                    "-vf", f"fps={fps},scale={w}:{h}:flags=lanczos",
-                    str(frame_pattern)
-                ]
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                return res.returncode, res.stderr.decode('utf-8', errors='ignore')
+            estimated_total_frames = int(options.get("total_frames", 0) or options.get("estimated_total_frames", 0))
+            if estimated_total_frames <= 0:
+                try:
+                    with Image.open(input_path) as im:
+                        if getattr(im, "n_frames", 1) > 1:
+                            estimated_total_frames = im.n_frames
+                except Exception:
+                    pass
 
-            retcode, ffmpeg_err = await asyncio.to_thread(run_ffmpeg)
-            
+            await task.update_progress(10, "Extracting video frames with FFmpeg...")
+            await asyncio.sleep(0)
+
+            frame_pattern = task_dir / "raw_frame_%05d.png"
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", str(input_path),
+                "-vf", f"fps={fps},scale={w}:{h}:flags=lanczos",
+                "-progress", "pipe:1",
+                str(frame_pattern),
+            ]
+
+            loop = asyncio.get_running_loop()
+            progress_queue: asyncio.Queue = asyncio.Queue()
+
+            def ffmpeg_worker():
+                try:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        bufsize=1,
+                        encoding="utf-8",
+                        errors="ignore",
+                    )
+                except Exception as exc:
+                    loop.call_soon_threadsafe(progress_queue.put_nowait, ("error", str(exc)))
+                    return
+
+                stderr_lines = []
+
+                def read_stderr():
+                    try:
+                        for err_line in proc.stderr:
+                            stderr_lines.append(err_line)
+                    except Exception:
+                        pass
+
+                stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+                stderr_thread.start()
+
+                try:
+                    for line in proc.stdout:
+                        line = line.strip()
+                        if line.startswith("frame="):
+                            try:
+                                frame_val = int(line.split("=")[1].strip())
+                                loop.call_soon_threadsafe(
+                                    progress_queue.put_nowait, ("frame", frame_val)
+                                )
+                            except ValueError:
+                                pass
+                except Exception:
+                    pass
+
+                proc.wait()
+                stderr_thread.join(timeout=2)
+                err_text = "".join(stderr_lines)
+                loop.call_soon_threadsafe(
+                    progress_queue.put_nowait, ("done", (proc.returncode, err_text))
+                )
+
+            worker = threading.Thread(target=ffmpeg_worker, daemon=True)
+            worker.start()
+
+            last_extract_prog = 10
+            ffmpeg_err = ""
+            while True:
+                msg_type, data = await progress_queue.get()
+                if msg_type == "frame":
+                    current_frame = data
+                    if estimated_total_frames > 0:
+                        cur_prog = min(39, 10 + int(30 * (current_frame / estimated_total_frames)))
+                    else:
+                        cur_prog = min(39, 10 + min(29, current_frame))
+                    if cur_prog > last_extract_prog or current_frame % 5 == 0:
+                        last_extract_prog = cur_prog
+                        await task.update_progress(cur_prog, f"Extracting frame {current_frame}...")
+                        await asyncio.sleep(0)
+                elif msg_type == "done":
+                    retcode, ffmpeg_err = data
+                    break
+                elif msg_type == "error":
+                    ffmpeg_err = data
+                    break
+
             raw_files = sorted(task_dir.glob("raw_frame_*.png"))
-            
+
             # Fallback to PIL extraction if ffmpeg didn't produce frames (e.g. animated GIF)
             if not raw_files:
                 try:
@@ -305,30 +633,46 @@ class TaskManager:
                 raise RuntimeError(f"Failed to extract video frames: {ffmpeg_err[-300:] if ffmpeg_err else 'Unknown format'}")
 
             total_frames = len(raw_files)
-            await task.update_progress(35, f"Binarizing & dithering {total_frames} frames ({dithering})...")
+            stage_desc = (
+                f"Processing {total_frames} frames (RGB565)..."
+                if color_mode == "rgb565"
+                else (
+                    f"Processing {total_frames} frames (Grayscale)..."
+                    if color_mode == "grayscale"
+                    else f"Binarizing & dithering {total_frames} frames ({dithering})..."
+                )
+            )
+            await task.update_progress(40, stage_desc)
+            await asyncio.sleep(0)
 
             packed_bytes_list = []
             preview_png_paths = []
+            last_reported_prog = 40
 
             for idx, raw_file_path in enumerate(raw_files):
                 with Image.open(raw_file_path) as raw_img:
-                    dithered = convert_frame_to_1bit(raw_img, dithering)
-                    packed = pack_1bit_pixels(dithered)
+                    packed, preview_img = convert_frame_by_mode(raw_img, color_mode, dithering)
                     packed_bytes_list.append(packed)
 
                     png_path = frames_dir / f"frame_{idx:05d}.png"
-                    dithered.save(png_path)
+                    preview_img.save(png_path)
                     preview_png_paths.append(png_path)
 
-                # Incremental progress reporting
-                if total_frames > 0 and ((idx + 1) % max(1, total_frames // 10) == 0 or idx == total_frames - 1):
-                    cur_prog = 35 + int(50 * (idx + 1) / total_frames)
-                    await task.update_progress(cur_prog, f"Dithering frame {idx + 1}/{total_frames} ({dithering})...")
+                cur_prog = 40 + int(50 * (idx + 1) / total_frames)
+                if (
+                    (idx == total_frames - 1)
+                    or ((idx + 1) % 10 == 0)
+                    or (cur_prog >= last_reported_prog + 5)
+                ):
+                    await task.update_progress(cur_prog, f"Encoding frame {idx + 1}/{total_frames} ({color_mode})...")
+                    await asyncio.sleep(0)
+                    last_reported_prog = cur_prog
 
-            await task.update_progress(88, f"Compiling C++ header and ZIP bundle for {total_frames} frames...")
+            await task.update_progress(90, f"Compiling C++ header and ZIP bundle for {total_frames} frames...")
+            await asyncio.sleep(0)
 
             # 1. Generate C++ Header
-            header_str = generate_cpp_header(filename, resolution, fps, dithering, packed_bytes_list)
+            header_str = generate_cpp_header(filename, resolution, fps, dithering, color_mode, packed_bytes_list)
             safe_name = "".join(c if c.isalnum() else "_" for c in Path(filename).stem) or "animation"
             header_path = task_dir / f"soulcast_{safe_name}.h"
             with open(header_path, "w", encoding="utf-8") as f:
@@ -350,25 +694,52 @@ class TaskManager:
                     "resolution": resolution,
                     "fps": fps,
                     "dithering": dithering,
+                    "color_mode": color_mode,
                     "total_frames": total_frames,
                     "bytes_per_frame": len(packed_bytes_list[0]) if packed_bytes_list else 0,
-                    "generated_by": "SoulCast IV v1.0"
+                    "generated_by": "SoulCast IV v1.2"
                 }
                 zf.writestr("manifest.json", json.dumps(manifest, indent=2))
                 
                 # Add README
-                readme_text = (
-                    f"# SoulCast IV - 1-Bit Animation Export\n\n"
-                    f"- Source: {filename}\n"
-                    f"- Resolution: {resolution}\n"
-                    f"- Framerate: {fps} FPS\n"
-                    f"- Dither Algorithm: {dithering}\n"
-                    f"- Frame Count: {total_frames}\n\n"
-                    f"## How to use in Arduino / ESP32:\n"
-                    f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
-                    f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
-                    f"3. Use with Adafruit_SSD1306: `display.drawBitmap(0, 0, {safe_name}_frames[frame], {w}, {h}, 1);`\n"
-                )
+                if color_mode == "rgb565":
+                    readme_text = (
+                        f"# SoulCast IV - RGB565 Color Animation Export\n\n"
+                        f"- Source: {filename}\n"
+                        f"- Resolution: {resolution}\n"
+                        f"- Framerate: {fps} FPS\n"
+                        f"- Color Mode: RGB565 (16-bit Big-Endian)\n"
+                        f"- Frame Count: {total_frames}\n\n"
+                        f"## How to use with TFT_eSPI (ST7789, ILI9341, GC9A01):\n"
+                        f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
+                        f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
+                        f"3. Render frame: `DRAW_FRAME(tft, frame);`\n"
+                    )
+                elif color_mode == "grayscale":
+                    readme_text = (
+                        f"# SoulCast IV - Grayscale Animation Export\n\n"
+                        f"- Source: {filename}\n"
+                        f"- Resolution: {resolution}\n"
+                        f"- Framerate: {fps} FPS\n"
+                        f"- Color Mode: Grayscale (8-bit)\n"
+                        f"- Frame Count: {total_frames}\n\n"
+                        f"## How to use in Arduino / ESP32:\n"
+                        f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
+                        f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
+                    )
+                else:
+                    readme_text = (
+                        f"# SoulCast IV - 1-Bit Animation Export\n\n"
+                        f"- Source: {filename}\n"
+                        f"- Resolution: {resolution}\n"
+                        f"- Framerate: {fps} FPS\n"
+                        f"- Dither Algorithm: {dithering}\n"
+                        f"- Frame Count: {total_frames}\n\n"
+                        f"## How to use in Arduino / ESP32:\n"
+                        f"1. Copy `soulcast_{safe_name}.h` into your sketch folder.\n"
+                        f"2. Include the header: `#include \"soulcast_{safe_name}.h\"`\n"
+                        f"3. Use with Adafruit_SSD1306: `display.drawBitmap(0, 0, {safe_name}_frames[frame], {w}, {h}, 1);`\n"
+                    )
                 zf.writestr("README.md", readme_text)
 
             result_info = {
@@ -379,6 +750,7 @@ class TaskManager:
                 "resolution": resolution,
                 "fps": fps,
                 "dithering": dithering,
+                "color_mode": color_mode,
             }
 
             await task.update_progress(

@@ -160,7 +160,44 @@ void loop() {
 
 ---
 
-### 4.3. Arduino AVR (Uno, Nano, Mega)
+### 4.3. ESP32 with Color Displays (ST7789 / GC9A01 via TFT_eSPI)
+
+For 16-bit RGB565 full-color animations:
+
+```cpp
+#include <TFT_eSPI.h>
+#include "soulcast_animation.h"
+
+TFT_eSPI tft = TFT_eSPI();
+
+void setup() {
+    tft.init();
+    tft.setRotation(0);
+    tft.fillScreen(TFT_BLACK);
+    // Swap color bytes if your display driver expects byte-swapped SPI
+    tft.setSwapBytes(true);
+}
+
+void loop() {
+    const unsigned long frame_period = 1000 / ANIMATION_FPS;
+
+    for (int i = 0; i < ANIMATION_FRAME_COUNT; i++) {
+        unsigned long t0 = millis();
+
+        // Use the plug-and-play helper macro generated in the header
+        DRAW_FRAME(tft, i);
+
+        unsigned long elapsed = millis() - t0;
+        if (elapsed < frame_period) {
+            delay(frame_period - elapsed);
+        }
+    }
+}
+```
+
+---
+
+### 4.4. Arduino AVR (Uno, Nano, Mega)
 
 For AVR microcontrollers with limited RAM, arrays stored in flash require reading through `pgm_read_byte`:
 
